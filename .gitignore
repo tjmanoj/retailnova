@@ -1,0 +1,24 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+# Node
+node_modules/
+web/dist/
+# Firebase
+.firebase/
+*-debug.log
+# Env and secrets (never commit)
+.env
+.env.*
+!.env.example
+*service-account*.json
+*credentials*.json
+client_secret*.json
+# Generated data (rebuildable from data/generate.py)
+data/out/
+# Local working notes
+MY-TASKS.md
+TEST-PLAN.md
+.DS_Store
