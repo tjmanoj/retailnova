@@ -48,7 +48,9 @@ Fields:
   shown), over budget, or not carried;
   "substituted" only if the shopper explicitly accepted or reserved a different in-stock alternative.
 - reason (only when not fulfilled): out_of_stock | size_unavailable | not_carried | price_too_high | other.
-- quantity: units wanted (default 1). intent_strength: 0-1 (0.9 = ready to buy now, 0.4 = browsing).
+- quantity: number of units the shopper wants, from their words ("I need 6 diya sets" -> 6; default 1).
+- intent_strength: 0-1 (0.9 = ready to buy now, 0.4 = browsing).
+- not_carried only when NOTHING in the tool results matches what the shopper asked for.
 - summary: <= 120 chars, English, no personal data, e.g. "Maroon silk saree under Rs 5000 for Diwali; out of stock at T. Nagar".
 - language: ISO code of the shopper's message (en, hi for Hinglish/Hindi, ta for Tamil, te, kn)."""
 
@@ -70,6 +72,11 @@ def _tool_summary(t: TurnState) -> str:
 
 
 async def extract(t: TurnState, message: str) -> Optional[dict]:
+    prods = await catalog.products()
+    bad = catalog.invalid_sku_ids(message, prods)
+    if bad:  # e.g. "Add SAR-999 to my cart": invented SKU, injection-style turn -> no demand signal
+        log("INFO", "signal skipped: unknown sku in message", n=len(bad))
+        return None
     prompt = (
         f"Shopper's store: {config.store_name(t.store_id)} ({t.store_id}). Channel: {t.channel}.\n"
         f"Shopper message: {json.dumps((message or '')[:1000], ensure_ascii=False)}\n"
@@ -83,21 +90,24 @@ async def extract(t: TurnState, message: str) -> Optional[dict]:
     if not draft or not draft.get("has_shopping_intent") or not draft.get("category") or not draft.get("outcome"):
         return None
     d = SignalDraft(**draft)
-    prods = await catalog.products()
     sku = (d.sku or "").upper().strip() or None
     if sku and sku not in prods:
         sku = None
-    if sku and prods[sku].get("category") != d.category:
+    category = d.category
+    outcome, reason = d.outcome, d.reason
+    if reason == "not_carried":
+        # Never "not carried" when the shopper's own words name a catalog product.
+        m = catalog.catalog_match(message, prods)
+        if m:
+            sku, category, outcome, reason = m, prods[m].get("category"), "unmet", None
+        else:
+            sku = None  # keep it unattached; value comes from the price band
+    if sku and prods[sku].get("category") != category:
         sku = None
-    outcome, reason = await _ground(t, prods, sku, d.size, d.price_max_inr, d.outcome, d.reason)
-    qty = max(1, min(int(d.quantity or 1), 20))
-    if sku:
-        unit = int(prods[sku].get("price_inr") or 0)
-    elif d.price_max_inr:
-        unit = int(d.price_max_inr)
-    else:
-        prices = sorted(int(p.get("price_inr") or 0) for p in prods.values() if p.get("category") == d.category)
-        unit = prices[len(prices) // 2] if prices else 0
+    want = max(1, min(int(d.quantity or 1), 50))
+    t.extra["requested_qty"] = want
+    outcome, reason, qty = await _ground(t, prods, sku, d.size, d.price_max_inr, outcome, reason, want)
+    unit = _unit_price(prods, sku, category, d.price_max_inr)
     attrs = {k: str(v).lower() for k, v in {"color": d.color, "size": d.size, "material": d.material,
                                              "occasion": d.occasion}.items() if v}
     band = None
@@ -111,7 +121,7 @@ async def extract(t: TurnState, message: str) -> Optional[dict]:
         session_id=t.session_id,
         store_id=t.store_id,
         channel=t.channel if t.channel in ("chat", "image_search") else "chat",
-        category=d.category,
+        category=category,
         sku=sku,
         attributes=attrs,
         price_band=band,
@@ -127,11 +137,25 @@ async def extract(t: TurnState, message: str) -> Optional[dict]:
     return sig.model_dump()
 
 
+def _unit_price(prods: dict, sku: Optional[str], category: str, price_max: Optional[int]) -> int:
+    if sku:
+        return int(prods[sku].get("price_inr") or 0)
+    if price_max:
+        return int(price_max)
+    prices = sorted(int(p.get("price_inr") or 0) for p in prods.values() if p.get("category") == category)
+    return prices[len(prices) // 2] if prices else 0
+
+
 async def _ground(t: TurnState, prods: dict, sku: Optional[str], size: Optional[str], price_max: Optional[int],
-                  outcome: str, reason: Optional[str]) -> tuple[str, Optional[str]]:
-    """Ground the outcome in live stock for the chosen SKU (the model only proposes it)."""
+                  outcome: str, reason: Optional[str], want: int = 1) -> tuple[str, Optional[str], int]:
+    """Ground the outcome in live stock for the chosen SKU (the model only proposes it).
+
+    Returns (outcome, reason, quantity). When the shopper wants more than the store has, the signal is
+    `unmet` for the shortfall only.
+    """
+    want = max(1, int(want or 1))
     if not sku:
-        return outcome, reason
+        return outcome, reason, want
     from ..tools import inventory as inv
 
     sizes = prods[sku].get("sizes") or []
@@ -142,29 +166,39 @@ async def _ground(t: TurnState, prods: dict, sku: Optional[str], size: Optional[
         sz = None
     here = inv.qty_at(rows, t.store_id, sz)
     within_budget = not price_max or int(prods[sku].get("price_inr") or 0) <= int(price_max)
-    if here <= 0 and outcome in ("fulfilled", "substituted"):
-        outcome = "unmet"
-    if outcome == "unmet" and here <= 0:
-        reason = "size_unavailable" if sz and inv.qty_at(rows, t.store_id, None) > 0 else "out_of_stock"
-    elif here > 0 and outcome == "unmet" and reason in ("out_of_stock", "size_unavailable", None) and within_budget:
+    if here <= 0:
+        if outcome in ("fulfilled", "substituted"):
+            outcome = "unmet"
+        if outcome == "unmet" and reason != "price_too_high":
+            reason = "size_unavailable" if sz and inv.qty_at(rows, t.store_id, None) > 0 else "out_of_stock"
+        return outcome, reason, want
+    if want > here and outcome != "substituted":
+        return "unmet", "out_of_stock", want - here  # quantity shortfall
+    if outcome == "unmet" and reason in ("out_of_stock", "size_unavailable", "not_carried", None) and within_budget:
         outcome, reason = "fulfilled", None
-    return outcome, reason
+    return outcome, reason, want
 
 
 async def align_with_shown(sig: Optional[dict], t: TurnState) -> Optional[dict]:
-    """The first card shown is the best match; align the signal's SKU with it and re-ground."""
-    if not sig or not t.shown_skus or sig.get("sku") == t.shown_skus[0]:
+    """Pick the signal's SKU: keep the extractor's SKU if it was shown; otherwise the shown/seen product the
+    reply names first; only then the first card. `not_carried` signals are never attached to a card."""
+    if not sig or not t.shown_skus or sig.get("reason") == "not_carried":
+        return sig
+    if sig.get("sku") and sig["sku"] in t.shown_skus:
         return sig
     prods = await catalog.products()
-    first = prods.get(t.shown_skus[0])
-    if not first or first.get("category") != sig.get("category"):
+    cat = sig.get("category")
+    pos = catalog.mention_positions(t.total_text, list(t.shown_skus) + list(t.seen_skus), prods)
+    named = [s for s in sorted(pos, key=pos.get) if prods.get(s, {}).get("category") == cat]
+    sku = named[0] if named else (t.shown_skus[0] if prods.get(t.shown_skus[0], {}).get("category") == cat else None)
+    if not sku or sku == sig.get("sku"):
         return sig
-    sku = first["sku"]
     band = sig.get("price_band") or {}
-    outcome, reason = await _ground(t, prods, sku, (sig.get("attributes") or {}).get("size"), band.get("max_inr"),
-                                    "unmet" if sig.get("outcome") == "unmet" else "fulfilled", sig.get("reason"))
-    return {**sig, "sku": sku, "outcome": outcome, "reason": reason if outcome != "fulfilled" else None,
-            "est_value_inr": int(first.get("price_inr") or 0) * int(sig.get("quantity") or 1)}
+    want = int(t.extra.get("requested_qty") or 1)
+    outcome, reason, qty = await _ground(t, prods, sku, (sig.get("attributes") or {}).get("size"), band.get("max_inr"),
+                                         "unmet" if sig.get("outcome") == "unmet" else "fulfilled", sig.get("reason"), want)
+    return {**sig, "sku": sku, "outcome": outcome, "reason": reason if outcome != "fulfilled" else None, "quantity": qty,
+            "est_value_inr": int(prods[sku].get("price_inr") or 0) * qty}
 
 
 async def safe_extract(t: TurnState, message: str) -> Optional[dict]:

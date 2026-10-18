@@ -126,15 +126,16 @@ LABELS = {
 }
 
 
-def run_ask(store_id: str, question: str, session_id: Optional[str]) -> AsyncIterator[str]:
+def run_ask(store_id: str, question: str, session_id: Optional[str], t0: Optional[float] = None) -> AsyncIterator[str]:
     ch = EventChannel()
     ch.emit("activity", {"id": "a0", "tool": "understand", "label": "Reading your question", "status": "start"})
-    asyncio.create_task(_produce(ch, store_id, question, session_id))
+    asyncio.create_task(_produce(ch, store_id, question, session_id, t0))
     return ch.stream()
 
 
-async def _produce(ch: EventChannel, store_id: str, question: str, session_id: Optional[str]) -> None:
-    t0 = time.monotonic()
+async def _produce(ch: EventChannel, store_id: str, question: str, session_id: Optional[str],
+                   t0: Optional[float] = None) -> None:
+    t0 = t0 or time.monotonic()
     sid = f"mgr_{session_id or uuid.uuid4().hex}"
     tctx = {"fallback": False, "models": set()}
     turn_ctx.set(tctx)

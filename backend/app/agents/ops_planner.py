@@ -89,15 +89,16 @@ def _inr(v: float) -> str:
     return f"₹{v}"
 
 
-def run_plan(store_id: str, category: Optional[str], horizon_days: int, question: Optional[str]) -> AsyncIterator[str]:
+def run_plan(store_id: str, category: Optional[str], horizon_days: int, question: Optional[str],
+             t0: Optional[float] = None) -> AsyncIterator[str]:
     ch = EventChannel()
-    asyncio.create_task(_produce(ch, store_id, category, horizon_days, question))
+    asyncio.create_task(_produce(ch, store_id, category, horizon_days, question, t0))
     return ch.stream()
 
 
 async def _produce(ch: EventChannel, store_id: str, category: Optional[str], horizon_days: int,
-                   question: Optional[str]) -> None:
-    t0 = time.monotonic()
+                   question: Optional[str], t0: Optional[float] = None) -> None:
+    t0 = t0 or time.monotonic()
     plan_id = new_id("plan")
     steps: dict[str, dict] = {}
     model_used = config.MODEL_AGENT

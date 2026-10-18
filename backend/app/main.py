@@ -92,7 +92,11 @@ async def unhandled(request: Request, exc: Exception):
 
 @app.middleware("http")
 async def access_log(request: Request, call_next):
+    # Request-arrival time: streams use it for done.latency_ms, so time spent before the handler shows up.
     t0 = time.monotonic()
+    request.state.t0 = t0
+    if request.url.path != "/api/health":
+        log("INFO", "request start", method=request.method, route=request.url.path)
     response = await call_next(request)
     if request.url.path not in ("/api/chat", "/api/plan", "/api/ask"):  # streams log their own line
         log("INFO", "request", method=request.method, route=request.url.path, status=response.status_code,
@@ -155,7 +159,8 @@ async def chat(req: ChatRequest, request: Request):
     store_id = _check_store(req.store_id)
     from .agents.concierge import run_chat
 
-    return sse_response(run_chat(req.session_id, (req.message or "").strip(), store_id, image, req.image_mime))
+    return sse_response(run_chat(req.session_id, (req.message or "").strip(), store_id, image, req.image_mime,
+                                 t0=getattr(request.state, "t0", None)))
 
 
 @app.post("/api/notify")
@@ -216,7 +221,8 @@ async def plan(req: PlanRequest, request: Request):
     store_id = _check_store(req.store_id)
     from .agents.ops_planner import run_plan
 
-    return sse_response(run_plan(store_id, req.category, req.horizon_days, req.question))
+    return sse_response(run_plan(store_id, req.category, req.horizon_days, req.question,
+                                 t0=getattr(request.state, "t0", None)))
 
 
 @app.post("/api/ask")
@@ -228,7 +234,7 @@ async def ask(req: AskRequest, request: Request):
     store_id = _check_store(req.store_id)
     from .agents.manager_qa import run_ask
 
-    return sse_response(run_ask(store_id, req.question.strip(), req.session_id))
+    return sse_response(run_ask(store_id, req.question.strip(), req.session_id, t0=getattr(request.state, "t0", None)))
 
 
 @app.post("/api/actions/{action_id}/approve")

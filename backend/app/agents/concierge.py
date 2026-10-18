@@ -65,6 +65,11 @@ async def search_products(
     invs = await inv.inventory_for_skus([p["sku"] for p in results])
     items = [catalog.compact(p, invs.get(p["sku"], []), t.store_id, t.requested_size) for p in results]
     t.see([p["sku"] for p in results])
+    rank = t.extra.setdefault("search_rank", [])
+    rank += [p["sku"] for p in results if p["sku"] not in rank]
+    req_color = color or await catalog.color_in_text(query)
+    if req_color:
+        t.extra["requested_color"] = req_color
     if items and "top_matches" not in t.extra:
         t.extra["top_matches"] = [{"sku": it["sku"], "stock_here": it["stock_here"]} for it in items[:2]]
     t.tool_log.append({"tool": "search_products", "args": {"query": query, "category": category, "color": color,
@@ -205,7 +210,8 @@ async def show_products(skus: list[str], reason: str, tool_context: ToolContext)
     if dropped:
         t.dropped_skus += dropped
         log("WARNING", "grounding_violation", dropped=dropped, session_hash=hash(t.session_id) % 100000)
-    cards = await catalog.build_cards(ok[:4], t.store_id, t.requested_size, reason)
+    ok = _by_search_rank(ok, t)
+    cards = await catalog.build_cards(ok[:4], t.store_id, t.requested_size, reason, t.extra.get("requested_color"))
     t.cards += cards
     t.shown_skus += [c["sku"] for c in cards]
     t.pending_products += cards
@@ -217,6 +223,12 @@ async def show_products(skus: list[str], reason: str, tool_context: ToolContext)
     if dropped:
         res["rejected_not_from_tools"] = dropped
     return res
+
+
+def _by_search_rank(skus: list[str], t: TurnState) -> list[str]:
+    """Best search match first (rank of first appearance in this turn's search results); others keep their order."""
+    rank = {s: i for i, s in enumerate(t.extra.get("search_rank", []))}
+    return sorted(skus, key=lambda s: (s not in rank, rank.get(s, 0), skus.index(s)))
 
 
 _OOS_RE = re.compile(r"out of stock|out-of-stock|stock mein nahi|stock me nahi|nahi hai|available nahi|khatam|sold out|"
@@ -234,25 +246,58 @@ def _lang(message: str) -> str:
     return "en"
 
 
-def _stock_note(card: dict, message: str, t: TurnState) -> str:
+async def _stores_with_stock(card: dict, t: TurnState) -> list[tuple[str, str, int]]:
+    """[(store_id, 'RS Puram, Coimbatore', qty)] best first, for the requested size when there is one."""
+    p = await catalog.product(card["sku"])
+    sz = t.requested_size if p and t.requested_size in (p.get("sizes") or []) and t.requested_size != "FREE" else None
+    rows = (await inv.inventory_for_skus([card["sku"]])).get(card["sku"], [])
+    out = []
+    for sid in config.STORE_ORDER:
+        if sid == t.store_id:
+            continue
+        q = inv.qty_at(rows, sid, sz)
+        if q > 0:
+            out.append((inv.rank_other_store(t.store_id, sid, q), sid, catalog.store_label(sid), q))
+    out.sort()
+    return [(sid, label, q) for _, sid, label, q in out]
+
+
+def _names_store_with_count(text: str, stores: list[tuple[str, str, int]]) -> bool:
+    low = text.lower()
+    for sid, label, q in stores[:3]:
+        name = config.store_name(sid).lower()
+        if (name in low or sid.lower() in low) and re.search(rf"\b{q}\b", low):
+            return True
+    return False
+
+
+def _stock_note(card: dict, message: str, t: TurnState, stores: list[tuple[str, str, int]], admitted: bool) -> str:
     name = re.split(r",| with ", card["name"])[0]
     store = config.store_name(t.store_id)
-    others = [a for a in card["availability"] if a["store_id"] != t.store_id and a["on_hand"] > 0]
-    others.sort(key=lambda a: inv.rank_other_store(t.store_id, a["store_id"], a["on_hand"]))
-    o = others[0] if others else None
     size = f" (size {t.requested_size})" if t.requested_size and t.requested_size != "FREE" else ""
+    top = stores[:2]
     lang = _lang(message)
     if lang == "hinglish":
-        tail = f"; {o['store_name']} mein {o['on_hand']} available hain" if o else ""
-        return f"\n\nNote: {name}{size} abhi {store} mein out of stock hai{tail}. Chahein toh wapas aane par notify kar doon?"
+        where = " aur ".join(f"{label} mein {q}" for _, label, q in top)
+        head = f"{name}{size}: " if admitted else f"{name}{size} abhi {store} mein out of stock hai. "
+        tail = f"{where} available hain; wahan reserve kar sakte hain, ya yahan wapas aane par notify kar doon?" if top \
+            else "Abhi kisi store mein stock nahi hai; wapas aane par notify kar doon?"
+        return f"\n\nNote: {head}{tail}"
     if lang == "tanglish":
-        tail = f"; {o['store_name']}-la {o['on_hand']} irukku" if o else ""
-        return f"\n\nNote: {name}{size} ippo {store}-la out of stock{tail}. Stock vandha notify pannatuma?"
+        where = ", ".join(f"{label}-la {q}" for _, label, q in top)
+        head = f"{name}{size}: " if admitted else f"{name}{size} ippo {store}-la out of stock. "
+        tail = f"{where} irukku; anga reserve pannalaam, illa stock vandha notify pannatuma?" if top \
+            else "Endha store-layum ippo stock illa; vandha notify pannatuma?"
+        return f"\n\nNote: {head}{tail}"
     if lang == "ta":
-        tail = f"; {o['store_name']} கடையில் {o['on_hand']} உள்ளது" if o else ""
-        return f"\n\nகுறிப்பு: {name}{size} இப்போது {store} கடையில் out of stock{tail}."
-    tail = f"; {o['store_name']} has {o['on_hand']}" if o else " at all our stores"
-    return f"\n\nNote: {name}{size} is out of stock at {store} right now{tail}. Want me to notify you when it's back?"
+        where = ", ".join(f"{label} கடையில் {q}" for _, label, q in top)
+        head = f"{name}{size}: " if admitted else f"{name}{size} இப்போது {store} கடையில் out of stock. "
+        tail = f"{where} உள்ளது; அங்கே reserve செய்யலாம் அல்லது notify செய்யலாம்." if top else "எந்த கடையிலும் இப்போது இல்லை."
+        return f"\n\nகுறிப்பு: {head}{tail}"
+    where = " and ".join(f"{label} has {q}" for _, label, q in top)
+    head = f"{name}{size}: " if admitted else f"{name}{size} is out of stock at {store} right now. "
+    tail = f"{where}; I can notify you or reserve there." if top else "It isn't in stock at any store right now; I can notify you when it's back."
+    return f"\n\nNote: {head}{tail}"
 
 
 def _last_event_has_text(tool_context: ToolContext) -> bool:
@@ -278,8 +323,12 @@ Rules:
   Never invent products, prices, discounts or stock. Pass budget (max_price_inr), colour, category and size to the search.
 - Respect budget and size strictly.
 - Stock honesty: every product has status_at_your_store. Never call an item available if it says OUT OF STOCK.
-  If the best match is out of stock (or the size is unavailable) at the shopper's store, say so clearly FIRST, name a
-  store that has it (from other_stores_with_stock), then offer an in-stock alternative, reserve, or notify-me.
+  If the best match is out of stock (or the size is unavailable) at the shopper's store, say so clearly FIRST, then name
+  the store(s) that have it WITH their counts, taken from other_stores_with_stock or check_availability (in any language,
+  e.g. "RS Puram, Coimbatore has 14; I can notify you or reserve there"), then offer an in-stock alternative.
+- If the shopper wants more units than a store has, say how many it has and where the rest are.
+- Category is a hint: if the item they name exists in another category (e.g. a diya set asked "for gifting"), offer it;
+  never say we don't carry something that a search returned.
 - To display products, call show_products with 1-4 SKUs. Write your reply text FIRST, then call show_products in the SAME
   response. Keep replies to 2-4 short sentences; cards show details, so do not list every price.
 - Use reserve_item or notify_me only when the shopper asks for it or agrees.
@@ -346,9 +395,11 @@ def _activity_label(name: str, args: dict, t: TurnState) -> str:
     return "Working on it"
 
 
-def run_chat(session_id: str, message: str, store_id: str, image: Optional[bytes], image_mime: Optional[str]) -> AsyncIterator[str]:
+def run_chat(session_id: str, message: str, store_id: str, image: Optional[bytes], image_mime: Optional[str],
+             t0: Optional[float] = None) -> AsyncIterator[str]:
+    """`t0` is the request-arrival time (monotonic), so latency_ms includes any time before the handler ran."""
     ch = EventChannel()
-    t0 = time.monotonic()
+    t0 = t0 or time.monotonic()
     ch.emit("activity", {"id": "a0", "tool": "understand",
                          "label": "Looking at your photo" if image else "Understanding your request", "status": "start"})
     task = asyncio.create_task(_produce(ch, session_id, message, store_id, image, image_mime, t0))
@@ -370,7 +421,10 @@ async def _produce(ch: EventChannel, session_id: str, message: str, store_id: st
     lock = _session_locks.setdefault(session_id, asyncio.Lock())
     model_used = config.MODEL_AGENT
     status = "ok"
+    t_wait = time.monotonic()
     async with lock:
+        lock_wait_ms = int((time.monotonic() - t_wait) * 1000)
+        handler_start_ms = int((t_wait - t0) * 1000)
         t = TurnState(session_id=session_id, store_id=store_id, channel="image_search" if image else "chat",
                       image=image, image_mime=image_mime)
         TURNS[session_id] = t
@@ -462,10 +516,11 @@ async def _produce(ch: EventChannel, session_id: str, message: str, store_id: st
                 if hits:
                     pos[s] = min(hits)
             mentioned = sorted(pos, key=pos.get)
-            pick = (mentioned or t.seen_skus)[:3]
+            pick = _by_search_rank((mentioned or t.seen_skus)[:3], t)
             if pick:
                 try:
-                    cards = await catalog.build_cards(pick, t.store_id, t.requested_size, None)
+                    cards = await catalog.build_cards(pick, t.store_id, t.requested_size, None,
+                                                      t.extra.get("requested_color"))
                     t.cards += cards
                     t.shown_skus += [c["sku"] for c in cards]
                     ch.emit("products", {"items": cards})
@@ -478,12 +533,20 @@ async def _produce(ch: EventChannel, session_id: str, message: str, store_id: st
         # Stock-honesty guard: the first card is the best match; if it is not in stock at the
         # shopper's store and the reply never said so, add a short grounded note.
         if status == "ok" and t.cards and t.total_text.strip():
-            first = t.cards[0]
-            if first["badge"] in ("other_store", "out_of_stock") and not _OOS_RE.search(t.total_text.lower()):
-                note = _stock_note(first, message, t)
-                t.total_text += note
-                ch.emit("text", {"delta": note})
-                log("INFO", "stock note added", sku=first["sku"])
+            # the item the reply talks about first (else the first card)
+            pos = catalog.mention_positions(t.total_text, [c["sku"] for c in t.cards], await catalog.products())
+            first = next((c for c in t.cards if c["sku"] == min(pos, key=pos.get)), t.cards[0]) if pos else t.cards[0]
+            if first["badge"] in ("other_store", "out_of_stock"):
+                try:
+                    stores = await _stores_with_stock(first, t)
+                    admitted = bool(_OOS_RE.search(t.total_text.lower()))
+                    if not admitted or not _names_store_with_count(t.total_text, stores):
+                        note = _stock_note(first, message, t, stores, admitted)
+                        t.total_text += note
+                        ch.emit("text", {"delta": note})
+                        log("INFO", "stock note added", sku=first["sku"], admitted=admitted)
+                except Exception as e:
+                    log("WARNING", "stock note failed", error=type(e).__name__)
         if status == "ok" and not t.total_text.strip():
             fallback = ("Here are some options I found for you." if t.cards else
                         "Sorry, I couldn't find a good match. Could you tell me a bit more about what you're looking for?")
@@ -529,7 +592,8 @@ async def _produce(ch: EventChannel, session_id: str, message: str, store_id: st
         ch.emit("done", {"latency_ms": latency, "model": model_used, "session_id": session_id})
         ch.close()
         asyncio.create_task(_upsert_conversation(session_id, store_id, message, t))
-        log("INFO", "chat turn", route="/api/chat", latency_ms=latency, status=status, model=model_used,
+        log("INFO", "chat turn", route="/api/chat", latency_ms=latency, handler_start_ms=handler_start_ms,
+            lock_wait_ms=lock_wait_ms, status=status, model=model_used,
             products=len(t.cards), dropped=len(t.dropped_skus), image=bool(image), fallback=bool(tctx.get("fallback")))
         TURNS.pop(session_id, None)
 

@@ -108,6 +108,11 @@ async def vector_search(query_text: str, limit: int = 12) -> list[tuple[str, flo
     return out, vec
 
 
+CATEGORY_BOOST = 0.05      # cosine-distance bonus for the requested category
+CROSS_CATEGORY_MARGIN = 0.03  # another category's item must beat the best in-category match by this much
+COLOR_BOOST = 0.10     # exact colour matches rank first when colour had to be relaxed
+
+
 async def search(
     query: str,
     store_id: str,
@@ -117,33 +122,129 @@ async def search(
     size: Optional[str] = None,
     k: int = 6,
 ) -> list[dict]:
-    """Semantic search, post-filtered by constraints. Returns product dicts ranked best first."""
+    """Semantic search with hard budget/size/colour filters. Returns product dicts ranked best first.
+
+    `category` is a ranking boost, not a hard filter: a product from another category is kept when it
+    matches the query clearly better than anything in the requested category (e.g. a brass diya set,
+    which is home decor, asked for "for gifting"), or when the category has fewer than 3 matches.
+    """
     category = normalize_category(category)
     size = size.upper().strip() if size else None
     if size in ("FREE SIZE", "ONE SIZE"):
         size = "FREE"
     cat = await products()
-    text = " ".join(x for x in [query, color or "", config.CATEGORY_LABEL.get(category or "", "")] if x).strip()
+    text = " ".join(x for x in [query, color or ""] if x).strip()
     qvec = None
     try:
         hits, qvec = await vector_search(text, limit=12)
     except Exception as e:  # embedding / vector search unavailable -> keyword ranking on the cached catalog
         log("WARNING", "vector search failed; keyword ranking", error=type(e).__name__, detail=str(e)[:160])
         hits = []
-    ranked = [cat[s] for s, _ in hits if s in cat]
-    filtered = [p for p in ranked if _passes(p, category, color, max_price_inr, size)]
-    if len(filtered) < 3:
-        # Supplement from the full catalog (72 SKUs), ranked by cosine similarity (or keywords).
-        pool = [p for p in cat.values() if p not in filtered and _passes(p, category, color, max_price_inr, size)]
-        if len(filtered) + len(pool) < 2 and color:
-            pool += [p for p in cat.values() if p not in filtered and p not in pool
-                     and _passes(p, category, None, max_price_inr, size)]
-        if qvec is not None:
-            pool.sort(key=lambda p: -_cos(qvec, p["_vec"]) if p.get("_vec") else 0)
-        else:
-            pool.sort(key=lambda p: -_keyword_score(text, p))
-        filtered += pool[: max(0, k - len(filtered))]
-    return filtered[:k]
+    # Cosine distance computed locally against the cached product embeddings (same metric as the
+    # Firestore vector index; the projected find_nearest results do not carry the distance field).
+    hit_rank = {s: i for i, (s, _) in enumerate(hits)}
+
+    def dist(p: dict) -> float:
+        if qvec is not None and p.get("_vec"):
+            return 1.0 - _cos(qvec, p["_vec"])
+        if p["sku"] in hit_rank:
+            return 0.2 + 0.01 * hit_rank[p["sku"]]
+        return 1.0 - min(1.0, _keyword_score(text, p) / 10.0)
+
+    def candidates(col: Optional[str]) -> list[dict]:
+        return [p for p in cat.values() if _passes(p, None, col, max_price_inr, size)]
+
+    pool = candidates(color)
+    if category:
+        in_cat = [p for p in pool if p.get("category") == category]
+        if color and len(in_cat) < 3:  # relax colour inside the category first (labelled as alternatives)
+            in_cat += [p for p in candidates(None) if p.get("category") == category and p not in in_cat]
+        best = min((dist(p) for p in in_cat), default=None)
+        # Other categories only when clearly better than anything in the requested one (or it has nothing).
+        others = [p for p in pool if p.get("category") != category
+                  and (best is None or dist(p) < best - CROSS_CATEGORY_MARGIN)]
+        pool = in_cat + others
+    elif color and len(pool) < 2:
+        pool = candidates(None)
+
+    def score(p: dict) -> float:
+        s = dist(p)
+        if category and p.get("category") == category:
+            s -= CATEGORY_BOOST
+        if color and color_matches_strict(p, color):
+            s -= COLOR_BOOST
+        return s
+
+    pool.sort(key=score)
+    return pool[:k]
+
+
+_STOP = {"the", "and", "with", "for", "set", "of", "a", "an", "in", "s", "women", "men", "mens", "womens"}
+
+
+def _stem(w: str) -> str:
+    return w[:-1] if len(w) > 3 and w.endswith("s") else w
+
+
+def main_name(p: dict) -> str:
+    """Product name without its trailing detail ('Maroon Kanchipuram Silk Saree, gold zari border' -> first part)."""
+    return re.split(r",| with | \(", (p.get("name") or "").lower())[0].strip()
+
+
+def mention_positions(text: str, skus: list[str], prods: dict) -> dict[str, int]:
+    """SKU -> first position where `text` names it (by SKU id or by its main product name)."""
+    low = re.sub(r"[^a-z0-9]", " ", (text or "").lower())  # same length as text
+    pos: dict[str, int] = {}
+    for s in dict.fromkeys(skus):
+        p = prods.get(s)
+        if not p:
+            continue
+        hits = []
+        m = re.search(r"\b" + r"\s*".join(re.escape(x) for x in s.lower().split("-")) + r"\b", low)
+        if m:
+            hits.append(m.start())
+        words = re.sub(r"[^a-z0-9]", " ", main_name(p)).split()
+        if words:
+            m = re.search(r"\b" + r"\s+".join(re.escape(w) for w in words) + r"\b", low)
+            if m:
+                hits.append(m.start())
+        if hits:
+            pos[s] = min(hits)
+    return pos
+
+
+def catalog_match(message: str, prods: dict) -> Optional[str]:
+    """A catalog SKU the shopper's own words name: its SKU id, or every content word of its main name."""
+    msg = message or ""
+    for m in re.finditer(r"\b([A-Za-z]{3})-(\d{3})\b", msg):
+        sku = f"{m.group(1).upper()}-{m.group(2)}"
+        if sku in prods:
+            return sku
+    toks = {_stem(w) for w in re.sub(r"[^a-z0-9]", " ", msg.lower()).split()}
+    best, best_n = None, 0
+    for s, p in prods.items():
+        words = [_stem(w) for w in re.sub(r"[^a-z0-9]", " ", main_name(p)).split() if w not in _STOP and len(w) > 2]
+        if len(words) >= 2 and all(w in toks for w in words) and len(words) > best_n:
+            best, best_n = s, len(words)
+    return best
+
+
+def invalid_sku_ids(message: str, prods: dict) -> list[str]:
+    """SKU-shaped ids in the message that are not in the catalog (e.g. 'SAR-999')."""
+    out = []
+    for m in re.finditer(r"\b([A-Za-z]{3})-(\d{3})\b", message or ""):
+        sku = f"{m.group(1).upper()}-{m.group(2)}"
+        if m.group(1).upper() in config.PREFIX_TO_CATEGORY and sku not in prods:
+            out.append(sku)
+    return out
+
+
+def color_matches_strict(p: dict, color: Optional[str]) -> bool:
+    """Requested colour appears in the product's own colour or name (colour family not counted)."""
+    if not color:
+        return True
+    fields = " ".join([_norm(p.get("color")), _norm(p.get("name"))])
+    return any(tok and tok in fields for tok in _norm(color).split())
 
 
 def _keyword_score(text: str, p: dict) -> float:
@@ -182,7 +283,7 @@ def compact(p: dict, rows: list[dict], store_id: str, size: Optional[str]) -> di
             continue
         q = inv.qty_at(rows, sid, sz)
         if q > 0:
-            others.append((inv.rank_other_store(store_id, sid, q), q, f"{config.store_name(sid)} ({sid}): {q}"))
+            others.append((inv.rank_other_store(store_id, sid, q), q, f"{store_label(sid)} ({sid}): {q}"))
     others.sort()
     healthy = [s for _, q, s in others if q >= 4]
     others = healthy or [s + " (only a few left)" for _, q, s in others]
@@ -211,7 +312,14 @@ def compact(p: dict, rows: list[dict], store_id: str, size: Optional[str]) -> di
     return out
 
 
-async def build_cards(skus: list[str], store_id: str, size: Optional[str], reason: Optional[str]) -> list[dict]:
+def store_label(sid: str) -> str:
+    """'RS Puram, Coimbatore' (city added for physical stores)."""
+    st = config.STORES.get(sid) or {}
+    return f"{st.get('name', sid)}, {st['city']}" if st.get("city") else st.get("name", sid)
+
+
+async def build_cards(skus: list[str], store_id: str, size: Optional[str], reason: Optional[str],
+                      requested_color: Optional[str] = None) -> list[dict]:
     cat = await products()
     invs = await inv.inventory_for_skus(skus)
     cards = []
@@ -239,7 +347,32 @@ async def build_cards(skus: list[str], store_id: str, size: Optional[str], reaso
                 "requested_store_id": store_id,
                 "requested_store_on_hand": here,
                 "badge": badge,
-                "reason": (reason or None) and reason[:140],
+                "reason": _card_reason(p, reason, requested_color),
             }
         )
     return cards
+
+
+def _card_reason(p: dict, reason: Optional[str], requested_color: Optional[str]) -> Optional[str]:
+    if requested_color and not color_matches_strict(p, requested_color):
+        alt = f"Alternative: different colour ({p.get('color') or 'other'})"
+        return (alt + (f". {reason}" if reason else ""))[:140]
+    return (reason or None) and reason[:140]
+
+
+_COLOR_WORDS: set[str] | None = None
+
+
+async def color_in_text(text: str) -> Optional[str]:
+    """A catalog colour word mentioned in free text ('pink kurta set' -> 'pink')."""
+    global _COLOR_WORDS
+    if _COLOR_WORDS is None:
+        words = set()
+        for p in (await products()).values():
+            for f in (p.get("color"), p.get("color_family")):
+                words |= {w for w in _norm(f).split() if len(w) > 2}
+        _COLOR_WORDS = words
+    for w in _norm(text).split():
+        if w in _COLOR_WORDS:
+            return w
+    return None
