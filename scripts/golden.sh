@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# RetailNova golden checks: 16 end-to-end API checks (9 core + 6 for v1.1 + reset) against ${BASE:-http://localhost:8080}.
+# RetailNova golden checks: 17 end-to-end API checks (9 core + 7 for v1.1 + reset) against ${BASE:-http://localhost:8080}.
 # Each check prints PASS/FAIL; the script exits non-zero if any check fails.
 # Needs: curl, python3. Resets demo data first (GOLDEN_PRERESET=0 to skip) and again at the end.
 set -u
@@ -137,6 +137,15 @@ import json,sys; d=json.load(sys.stdin)
 ok = len(d["inventory_changes"])>=1 and d["notifications_created"]>=1 and d["action"]["status"]=="executed"
 print(("OK " if ok else "BAD ") + "%s %s changes=%s notifications=%s" % (d["action"]["type"], d["action"]["sku"],
   [(c["store_id"], c["delta"], c["on_hand_after"]) for c in d["inventory_changes"]], d["notifications_created"]))' 2>&1)
+  if [[ "$R" == OK* ]]; then  # the executed action must show up as revenue protected on the radar
+    RP=0
+    for i in 1 2 3 4 5 6; do
+      RP=$(curl -s --max-time 30 "$BASE/api/radar?store_id=CHN-TNG" | "$PY" -c 'import json,sys; print(int(json.load(sys.stdin)["kpis"].get("revenue_protected_inr") or 0))' 2>/dev/null || echo 0)
+      [ "${RP:-0}" -gt 0 ] && break
+      sleep 2
+    done
+    [ "${RP:-0}" -gt 0 ] && R="$R radar_revenue_protected=$RP" || R="BAD ${R#OK } radar_revenue_protected=$RP"
+  fi
   case "$R" in OK*) pass 9 "approve: ${R#OK }";; *) fail 9 "approve: ${R#BAD }";; esac
 else
   fail 9 "approve: no proposal to approve"
@@ -258,10 +267,29 @@ PY
   case "$R" in OK*) [ "$F" = "True" ] && pass 15 "memory ($MEM): ${R#OK } forgotten=$F" || fail 15 "memory: forget failed ($F)";; *) fail 15 "memory ($MEM): ${R#BAD }";; esac
 fi
 
-# 16. reset (last, leaves demo data clean)
+# 16. assortment gap: an ask for something we don't sell -> not_carried signal -> radar assortment_gaps
+R=$(curl -s --max-time 40 -X POST "$BASE/api/assist" -H 'content-type: application/json' \
+  -d "{\"store_id\":\"CHN-TNG\",\"text\":\"Customer asked for a lehenga choli for her sister's wedding, size M, around 7000; we don't sell lehengas\"}" | "$PY" -c '
+import json,sys; d=json.load(sys.stdin); s=d.get("signal") or {}
+ok = s.get("outcome")=="unmet" and s.get("reason")=="not_carried"
+print(("OK " if ok else "BAD ") + "category=%s outcome=%s reason=%s item=%s" % (s.get("category"), s.get("outcome"), s.get("reason"), (s.get("attributes") or {}).get("item")))' 2>&1)
+if [[ "$R" == OK* ]]; then
+  GAP=""
+  for i in 1 2 3 4 5 6; do
+    GAP=$(curl -s --max-time 30 "$BASE/api/radar?store_id=CHN-TNG" | "$PY" -c '
+import json,sys; g=[x["label"] for x in json.load(sys.stdin).get("assortment_gaps") or []]
+print(next((x for x in g if "lehenga" in x.lower()), ""))' 2>/dev/null)
+    [ -n "$GAP" ] && break
+    sleep 2
+  done
+  [ -n "$GAP" ] && R="$R gap='$GAP'" || R="BAD ${R#OK } (no lehenga in assortment_gaps)"
+fi
+case "$R" in OK*) pass 16 "assortment gap: ${R#OK }";; *) fail 16 "assortment gap: ${R#BAD }";; esac
+
+# 17. reset (last, leaves demo data clean)
 if curl -s --max-time 60 -X POST "$BASE/api/demo/reset" | "$PY" -c 'import json,sys; assert json.load(sys.stdin)["reset_at"]' 2>/dev/null; then
-  pass 16 "reset"; else fail 16 "reset"; fi
+  pass 17 "reset"; else fail 17 "reset"; fi
 
 echo "----"
 if [ "$FAILS" -gt 0 ]; then echo "$FAILS check(s) failed"; exit 1; fi
-echo "all 16 checks passed"
+echo "all 17 checks passed"

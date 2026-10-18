@@ -6,13 +6,14 @@ Missing BigQuery tables raise BQUnavailable; callers degrade gracefully.
 from __future__ import annotations
 
 import math
+import re
 from collections import defaultdict
 from typing import Optional
 
 from google.cloud import bigquery
 
 from .. import config
-from ..db import BQUnavailable, bq_query, bq_table, cache, clean_doc, fs
+from ..db import BQUnavailable, bq_query, bq_table, cache, clean_doc, fs, log
 from . import catalog
 from . import inventory as inv
 
@@ -399,7 +400,7 @@ async def radar(store_id: str, category: Optional[str]) -> dict:
             "revenue_protected_inr": int(revenue_protected),
         },
         "top_gaps": top,
-        "assortment_gaps": assortment_gaps(sigs, category),
+        "assortment_gaps": assortment_gaps(sigs),  # store-wide: what the store does not sell
         "series": series,
         "recent_signals": recent,
     }
@@ -409,12 +410,38 @@ async def _revenue_protected(store_id: str) -> int:
     """§9.7: sum of expected_revenue_protected_inr over executed actions for the store (reset deletes actions)."""
     from google.cloud.firestore_v1.base_query import FieldFilter
 
+    total = 0
     try:
+        # store_id on an action is its destination store; approve sets status "executed"
         q = fs().collection("actions").where(filter=FieldFilter("store_id", "==", store_id))
-        return sum(int((d.to_dict() or {}).get("expected_revenue_protected_inr") or 0)
-                   async for d in q.stream() if (d.to_dict() or {}).get("status") == "executed")
-    except Exception:
-        return 0
+        async for d in q.stream():
+            a = d.to_dict() or {}
+            if a.get("status") in ("executed", "approved"):
+                total += int(a.get("expected_revenue_protected_inr") or 0)
+    except Exception as e:
+        log("WARNING", "revenue protected query failed", error=type(e).__name__, detail=str(e)[:160])
+    return total
+
+
+_LOOKED_FOR = re.compile(r"^\s*(?:looked|asked|searched|wanted|came)\s+(?:for\s+)?(?:an?\s+|the\s+)?(.+?)(?:;|,| but | - |$)", re.I)
+
+
+def gap_label(r: dict) -> str:
+    """Label for a not_carried ask: attributes.item, else the item in the summary ('Looked for X; not carried'),
+    else subcategory / attribute combination, else the category."""
+    a = r.get("attributes") or {}
+    item = (a.get("item") or "").strip()
+    if not item:
+        m = _LOOKED_FOR.match(r.get("summary") or "")
+        if m and 3 <= len(m.group(1)) <= 60:
+            item = m.group(1).strip()
+    if not item:
+        item = " ".join(x for x in [a.get("color", ""), a.get("material", ""), a.get("subcategory", ""),
+                                    (f"size {a['size']}" if a.get("size") else "")] if x)
+        cat = config.CATEGORY_LABEL.get(r.get("category"), r.get("category") or "").lower()
+        item = f"{cat} ({item})" if item else cat
+    item = re.sub(r"\s+", " ", item).strip()
+    return item[:1].upper() + item[1:]
 
 
 def assortment_gaps(sigs: list[dict], category: Optional[str] = None, days: int = 7, limit: int = 5) -> list[dict]:
@@ -425,15 +452,9 @@ def assortment_gaps(sigs: list[dict], category: Optional[str] = None, days: int 
             continue
         if category and r.get("category") != category:
             continue
-        a = r.get("attributes") or {}
-        item = (a.get("item") or "").strip().lower()
-        if item:
-            label = item
-        else:
-            label = " ".join(x for x in [a.get("color", ""), a.get("material", ""),
-                                         config.CATEGORY_LABEL.get(r.get("category"), r.get("category") or "").lower()] if x)
-        key = (r.get("category"), label)
-        g = groups.setdefault(key, {"label": label[:1].upper() + label[1:], "category": r.get("category"),
+        label = gap_label(r)
+        key = (r.get("category"), label.lower())
+        g = groups.setdefault(key, {"label": label, "category": r.get("category"),
                                     "asks_7d": 0, "est_value_7d_inr": 0, "examples": []})
         g["asks_7d"] += int(r.get("quantity") or 1)
         g["est_value_7d_inr"] += int(r.get("est_value_inr") or 0)

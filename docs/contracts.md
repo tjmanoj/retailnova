@@ -431,3 +431,9 @@ The UI calls `POST /api/ask` with the question "Give me my morning brief for {st
   - When staff report the customer left without buying, but the system shows stock at that store, the signal stays `unmet` with `reason: "other"`, plus `attributes.stock_check` (for example "system shows 12 in stock"), as a shelf-accuracy flag.
   - Signals may carry `attributes.item` (e.g. "lehenga choli"); `assortment_gaps` groups by it.
 - **Log and trace correlation.** Structured log lines carry `trace_id` and `logging.googleapis.com/trace` when Cloud Trace is on.
+- **Radar v1.1 fields.**
+  - `assortment_gaps` is store-wide: it ignores the `category` query parameter, because gaps are often outside the category being viewed.
+  - The label comes from `attributes.item`. Otherwise it comes from the item in the summary ("Looked for X; not carried"), then an attribute combination.
+  - `kpis.revenue_protected_inr` counts actions whose destination `store_id` is the store and whose status is `executed`.
+- **Asks for items we don't sell** (lehenga, sherwani, shawl, jewellery) still produce a `not_carried` signal. They are mapped to the closest category and carry `attributes.item`.
+- **Trend sources.** `sources[].url` is the publisher URL, resolved from the grounding redirect when the cache fills. If resolution fails or runs out of time, it stays the redirect URL.

@@ -19,9 +19,22 @@ async def market_trends(city: str, category: str, timeout: float = TIMEOUT_S) ->
     hit = cache.get(key)
     if hit is not None:
         return hit
+    deadline = time.monotonic() + timeout
     res = await asyncio.wait_for(_fetch(city, category), timeout)
-    if res["insights"]:
-        cache.set(key, res, TTL)
+    if not res["insights"]:
+        return res
+    # Resolve redirect links to publisher URLs within what is left of the caller's budget (max 2 s);
+    # if that runs out, finish in the background and update the cached entry.
+    task = asyncio.create_task(resolve_sources(res["sources"]))
+    try:
+        res["sources"] = await asyncio.wait_for(asyncio.shield(task), max(0.05, min(2.0, deadline - time.monotonic() - 0.2)))
+    except asyncio.TimeoutError:
+        def _update(tk: asyncio.Task) -> None:
+            if not tk.cancelled() and tk.exception() is None:
+                cache.set(key, {**res, "sources": tk.result()}, TTL)
+
+        task.add_done_callback(_update)
+    cache.set(key, res, TTL)
     return res
 
 
@@ -69,6 +82,37 @@ async def _fetch(city: str, category: str) -> dict:
     log("INFO", "trends fetched", latency_ms=int((time.monotonic() - t0) * 1000), insights=len(insights),
         sources=len(sources), category=category)
     return {"insights": insights[:3], "sources": sources}
+
+
+_REDIRECT_HOST = "vertexaisearch.cloud.google.com"
+
+
+async def resolve_sources(sources: list[dict], timeout: float = 2.0) -> list[dict]:
+    """Grounding links are Google redirect URLs; resolve each to the publisher URL (Location header),
+    in parallel, falling back to the redirect URL. Runs only on a cache fill."""
+    import httpx
+
+    async def one(client, src: dict) -> dict:
+        url = src.get("url") or ""
+        if _REDIRECT_HOST not in url:
+            return src
+        try:
+            r = await client.get(url)
+            loc = r.headers.get("location")
+            if r.status_code in (301, 302, 303, 307, 308) and loc and loc.startswith("http"):
+                return {**src, "url": loc}
+        except Exception:
+            pass
+        return src
+
+    if not sources:
+        return sources
+    t0 = time.monotonic()
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+        out = await asyncio.gather(*[one(client, s) for s in sources])
+    log("INFO", "trend sources resolved", latency_ms=int((time.monotonic() - t0) * 1000),
+        resolved=sum(1 for s in out if _REDIRECT_HOST not in s["url"]), total=len(out))
+    return list(out)
 
 
 def city_of(store_id: str) -> str:
