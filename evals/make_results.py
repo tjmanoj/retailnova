@@ -105,6 +105,13 @@ def main() -> None:
     c = results["cost"]
     c["pilot_total_inr"] = c["pilot_gemini_inr"] + c["pilot_run_inr"] + c["pilot_data_inr"]
     c["proto_total_inr"] = c["proto_gemini_inr"] + c["proto_run_inr"] + c["proto_data_inr"]
+    # Prefer the conservative figures when a separate prod latency benchmark exists (evals/latency_bench.py).
+    lb = ROOT / "latency_bench.json"
+    if lb.exists():
+        b = json.loads(lb.read_text())
+        L = results["latency"]
+        L["chat_p50_s"] = round(max(L["chat_p50_s"] or 0, b["wall_total_s"]["p50"]), 1)
+        L["chat_p95_s"] = round(max(L["chat_p95_s"] or 0, b["wall_total_s"]["p95"]), 1)
     if results["latency"]["plan_s"] is None:
         prev = ROOT / "RESULTS.json"
         if prev.exists():

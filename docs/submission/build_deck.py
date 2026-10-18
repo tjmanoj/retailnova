@@ -429,7 +429,7 @@ def build(template: Path, links: dict):
             ["Honest out-of-stock answers", fmt(ev.get("oos_honesty"), "pct")],
             ["Signal extraction accuracy", fmt(ev.get("signal_accuracy"), "pct")],
             ["Chat latency p50 / p95", f"{fmt(lat.get('chat_p50_s'), 's')} / {fmt(lat.get('chat_p95_s'), 's')}"],
-            ["Action plan (4 parallel steps + planner)", fmt(lat.get('plan_s'), 's')]]
+            ["Action plan (5 parallel steps incl. Search trends)", fmt(lat.get('plan_s'), 's')]]
     table(sl, 5.95, Y0 + 0.32, 3.73, rows, [2.45, 1.28], size=9, row_h=0.32)
     text(sl, X0, Y0 + 3.55, W, 0.45, [(f"Eval set: {ev.get('n_cases', 'TBD')} cases, {fmt(ev.get('case_pass_rate'), 'pct')} passing (English, Hinglish, Tamil, image, budget/size, out-of-stock, "
                                        "off-topic, prompt injection), run against the deployed API. Numbers are reported as measured.",

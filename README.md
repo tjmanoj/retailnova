@@ -140,7 +140,7 @@ Gemini runs through Agent Platform using the Cloud Run **service account**. Ther
 | Demand-signal category and outcome correct; correct SKU | **100%** (25/25); **7/7** |
 | Voice note, out-of-catalogue ask (lehenga), and walk-in logged by staff | **3/3** |
 | Cases passing overall | **97.0%** (32/33) |
-| Chat latency (10 sequential turns, including Model Armor and memory), p50 / p95 | **5.5 s / 7.3 s**; first streamed event about 0.1 s |
+| Chat latency (10 sequential turns on prod, including Model Armor and memory), p50 / p95 | **5.5 s / 8.8 s** (worst p95 of two runs); first streamed event under 0.3 s |
 
 Progress across runs:
 
