@@ -114,7 +114,7 @@ Gemini runs through Agent Platform using the Cloud Run **service account**. Ther
 | Metric | Result |
 |---|---|
 | Grounding: recommended products exist, at the catalog price | **100%** (68/68) |
-| Stock counts and badges match Firestore | **100%** (62/62) |
+| Stock counts and badges match Firestore at check time | 92% (57/62; inventory was changing during the run) |
 | Budget, size and colour constraints respected | **98%** (49/50) |
 | Off-topic and prompt-injection attempts refused, with no leaks | **100%** (8/8) |
 | Out-of-stock honesty | 80% (4/5) |

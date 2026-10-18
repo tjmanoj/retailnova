@@ -198,6 +198,8 @@ def fmt(v, kind="num", missing="TBD"):
         return f"{v:.1f}%"
     if kind == "inr":
         return f"₹{v:,.0f}"
+    if kind == "lakh":
+        return f"₹{v / 1e5:,.1f} lakh"
     if kind == "s":
         return f"{v:.1f}s"
     return f"{v:,.0f}" if isinstance(v, (int, float)) and abs(v) >= 100 else f"{v}"
@@ -375,7 +377,7 @@ def build(template: Path, links: dict):
     # 9. Estimated cost
     sl = s[8]
     set_title(sl, "Estimated implementation cost")
-    rows = [["Item", "Prototype (actual)", "Pilot: 50 stores, 100k chats/month (est.)"],
+    rows = [["Item", "Prototype to date (est.)", "Pilot: 50 stores, 100k chats/month (est.)"],
             ["Gemini (agents + extraction)", fmt(cost.get("proto_gemini_inr"), "inr"), fmt(cost.get("pilot_gemini_inr"), "inr") + " / month"],
             ["Cloud Run + Firebase Hosting", fmt(cost.get("proto_run_inr"), "inr"), fmt(cost.get("pilot_run_inr"), "inr") + " / month"],
             ["Firestore + BigQuery", fmt(cost.get("proto_data_inr"), "inr"), fmt(cost.get("pilot_data_inr"), "inr") + " / month"],
@@ -393,9 +395,14 @@ def build(template: Path, links: dict):
     # 10. Snapshots
     sl = s[9]
     set_title(sl, "Snapshots of the prototype")
-    shots = ["live-loop.png", "shop-chat.png", "plan.png", "notify.png"]
-    for i, name in enumerate(shots):
-        picture(sl, SHOTS / name, X0 + (i % 2) * 4.73, Y0 + (i // 2) * 2.08, 4.6, 1.98)
+    pairs = [("live-loop.png", "1 · Priya asks in Hinglish → grounded cards, sold out at T. Nagar → the demand signal lands live on Arjun's radar"),
+             ("notify.png", "2 · Arjun approves the plan: 12 units move from RS Puram → Priya's phone: “Reserved for you at T. Nagar”")]
+    for i, (name, cap) in enumerate(pairs):
+        cx = X0 + i * 4.73
+        picture(sl, SHOTS / name, cx, Y0, 4.6, 2.9)
+        text(sl, cx, Y0 + 2.98, 4.6, 0.6, [(cap, {"size": 9.5, "color": INK})])
+    text(sl, X0, Y0 + 3.62, W, 0.4, [("Live at https://retailnova-ai.web.app (no login). Also: mobile shopper chat, photo search, Tamil, manager Q&A.",
+                                      {"size": 9, "color": MUTED, "italic": True})])
 
     # 11. Performance / benchmarking
     sl = s[10]
@@ -404,7 +411,8 @@ def build(template: Path, links: dict):
     rows = [["Metric", "Sales-only forecast", "Demand-sensed (+ signals)"],
             ["Forecast error (WAPE)", fmt(bt.get("wape_sales_only"), "pct"), fmt(bt.get("wape_demand_sensed"), "pct")],
             ["Stockout days", fmt(bt.get("stockout_days_sales_only")), fmt(bt.get("stockout_days_demand_sensed"))],
-            ["Lost revenue", fmt(bt.get("lost_revenue_sales_only_inr"), "inr"), fmt(bt.get("lost_revenue_demand_sensed_inr"), "inr")]]
+            ["Lost revenue (6 weeks)", fmt(bt.get("lost_revenue_sales_only_inr"), "lakh"),
+             f'{fmt(bt.get("lost_revenue_demand_sensed_inr"), "lakh")} (−{fmt(bt.get("lost_revenue_reduction_pct"), "pct")})']]
     table(sl, X0, Y0 + 0.32, 5.4, rows, [1.9, 1.75, 1.75], size=9.5, row_h=0.36)
     text(sl, X0, Y0 + 1.85, 5.4, 0.9, [
         (bt.get("sensitivity_note", "Sensitivity across signal capture rates of 10–50% is in evals/backtest_report.md."), {"size": 9}),
@@ -416,11 +424,12 @@ def build(template: Path, links: dict):
             ["Grounded products (no invented SKUs)", fmt(ev.get("grounding_rate"), "pct")],
             ["Budget / size constraints respected", fmt(ev.get("constraint_adherence"), "pct")],
             ["Off-topic / injection refused", fmt(ev.get("refusal_accuracy"), "pct")],
+            ["Honest out-of-stock answers", fmt(ev.get("oos_honesty"), "pct")],
             ["Signal extraction accuracy", fmt(ev.get("signal_accuracy"), "pct")],
             ["Chat latency p50 / p95", f"{fmt(lat.get('chat_p50_s'), 's')} / {fmt(lat.get('chat_p95_s'), 's')}"],
             ["Action plan (4 parallel steps + planner)", fmt(lat.get('plan_s'), 's')]]
-    table(sl, 5.95, Y0 + 0.32, 3.73, rows, [2.45, 1.28], size=9, row_h=0.34)
-    text(sl, X0, Y0 + 3.55, W, 0.45, [(f"Eval set: {ev.get('n_cases', 'TBD')} cases (English, Hinglish, Tamil, image, budget/size, out-of-stock, "
+    table(sl, 5.95, Y0 + 0.32, 3.73, rows, [2.45, 1.28], size=9, row_h=0.32)
+    text(sl, X0, Y0 + 3.55, W, 0.45, [(f"Eval set: {ev.get('n_cases', 'TBD')} cases, {fmt(ev.get('case_pass_rate'), 'pct')} passing (English, Hinglish, Tamil, image, budget/size, out-of-stock, "
                                        "off-topic, prompt injection), run against the deployed API. Numbers are reported as measured.",
                                        {"size": 8.5, "color": MUTED, "italic": True})])
 

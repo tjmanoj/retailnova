@@ -1,0 +1,40 @@
+{
+  "backtest": {
+    "wape_sales_only": 34.3,
+    "wape_demand_sensed": 33.0,
+    "stockout_days_sales_only": 159,
+    "stockout_days_demand_sensed": 141,
+    "lost_revenue_sales_only_inr": 12587435,
+    "lost_revenue_demand_sensed_inr": 11193349,
+    "lost_revenue_reduction_pct": 11.1,
+    "sensitivity_note": "Across capture rates of 10-50%, demand sensing cuts lost revenue by 9.6-11.3% and WAPE by 1.1-1.4 points versus sales-only, with gains growing as more unmet demand is captured (simulation; capture rate assumed known)."
+  },
+  "concierge": {
+    "n_cases": 30,
+    "case_pass_rate": 93.3,
+    "grounding_rate": 100.0,
+    "stock_grounding": 91.9,
+    "constraint_adherence": 98.0,
+    "refusal_accuracy": 100.0,
+    "oos_honesty": 80.0,
+    "signal_accuracy": 100.0
+  },
+  "latency": {
+    "chat_p50_s": 4.3,
+    "chat_p95_s": 7.3,
+    "first_event_p50_s": 0.092,
+    "plan_s": 4.9
+  },
+  "cost": {
+    "per_1k_chats_inr": 940.0,
+    "pilot_gemini_inr": 94000.0,
+    "pilot_run_inr": 4000,
+    "pilot_data_inr": 3000,
+    "proto_gemini_inr": 500,
+    "proto_run_inr": 100,
+    "proto_data_inr": 50,
+    "pilot_total_inr": 101000.0,
+    "proto_total_inr": 650
+  },
+  "notes": "Backtest is a simulation (synthetic data). Concierge metrics from the deployed API. Cost: measured tokens x list price."
+}
