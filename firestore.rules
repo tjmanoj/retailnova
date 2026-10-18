@@ -1,0 +1,10 @@
+rules_version = '2';
+// Demo collections are public read-only. All writes go through the backend service account (Admin SDK bypasses rules).
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{collection}/{docId} {
+      allow read: if collection in ['stores', 'products', 'inventory', 'demand_signals', 'plans', 'actions', 'notifications', 'meta'];
+      allow write: if false;
+    }
+  }
+}
