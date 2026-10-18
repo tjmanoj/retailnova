@@ -5,8 +5,8 @@
 | | |
 |---|---|
 | **Live prototype (no login)** | https://retailnova-ai.web.app |
-| **Demo video** | _link added at submission_ |
-| **Pitch deck** | [`docs/submission/RetailNova-Prototype-Deck.pdf`](docs/submission/) |
+| **Demo video (3:48)** | https://youtu.be/4yQZb8ZcpYQ |
+| **Pitch deck** | [`docs/submission/RetailNova-Prototype-Deck.pdf`](docs/submission/RetailNova-Prototype-Deck.pdf) |
 | **API (Cloud Run)** | https://retailnova-api-569310655517.asia-south1.run.app/api/health |
 
 ![The RetailNova loop: the shopper asks, the demand signal lands, the plan is generated, the manager approves, and the shopper is notified (3× speed)](docs/media/loop.gif)
