@@ -115,6 +115,13 @@ async def extract(t: TurnState, message: str) -> Optional[dict]:
         if kc:
             draft["category"] = kc
     d = SignalDraft(**draft)
+    # Budget sanity: below the cheapest item in the category -> no SKU, zero value; absurdly low ("saree for
+    # Rs 1", discount bait) -> no signal at all.
+    floor = min((int(p.get("price_inr") or 0) for p in prods.values() if p.get("category") == d.category), default=0)
+    below_floor = bool(d.price_max_inr is not None and floor and d.price_max_inr < floor)
+    if below_floor and (d.price_max_inr <= 10 or d.price_max_inr < floor * 0.10):
+        log("INFO", "signal skipped: unrealistic budget", category=d.category)
+        return None
     sku = (d.sku or "").upper().strip() or None
     if sku and sku not in prods:
         sku = None
@@ -133,6 +140,8 @@ async def extract(t: TurnState, message: str) -> Optional[dict]:
     t.extra["requested_qty"] = want
     outcome, reason, qty = await _ground(t, prods, sku, d.size, d.price_max_inr, outcome, reason, want)
     unit = _unit_price(prods, sku, category, d.price_max_inr)
+    if below_floor and category == d.category:
+        sku, outcome, reason, unit = None, "unmet", "price_too_high", 0
     attrs = {k: str(v).lower()[:40] for k, v in {"color": d.color, "size": d.size, "material": d.material,
                                                   "occasion": d.occasion, "item": d.item}.items() if v}
     if t.channel == "store_assist" and t.extra.get("system_stock_note"):
@@ -263,6 +272,8 @@ async def align_with_shown(sig: Optional[dict], t: TurnState) -> Optional[dict]:
     reply names first; only then the first card. `not_carried` signals are never attached to a card."""
     if not sig or not t.shown_skus or sig.get("reason") == "not_carried":
         return sig
+    if sig.get("reason") == "price_too_high" and not sig.get("sku"):
+        return sig  # budget below anything we sell: no product to attach, value stays 0
     if sig.get("sku") and sig["sku"] in t.shown_skus:
         return sig
     prods = await catalog.products()

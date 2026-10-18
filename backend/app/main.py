@@ -333,6 +333,7 @@ async def profile_forget(req: ForgetRequest):
             from .agents import concierge
 
             concierge._no_memory.discard(req.session_id)
+            concierge._has_memory.discard(req.session_id)
             return await memory.forget(req.session_id)
     except ImportError:
         pass

@@ -359,6 +359,7 @@ def runner() -> InMemoryRunner:
             instruction=_instruction,
             tools=[search_products, check_availability, get_alternatives, reserve_item, notify_me, show_products],
             generate_content_config=low_thinking_config(temperature=0.4),
+            before_tool_callback=_await_verdict,
         )
         _runner = InMemoryRunner(agent=agent, app_name=APP_NAME)
     return _runner
@@ -367,6 +368,7 @@ def runner() -> InMemoryRunner:
 _session_locks: dict[str, asyncio.Lock] = {}
 _session_signals: dict[str, dict] = {}
 _no_memory: set[str] = set()
+_has_memory: set[str] = set()   # shoppers whose memory recall is worth waiting for
 _known_sessions: set[str] = set()
 
 
@@ -459,26 +461,105 @@ def _memory_mod():
         return None
 
 
-async def _prelude(ch: EventChannel, t: TurnState, message: str, audio: Optional[bytes], audio_mime: Optional[str],
-                   session_id: str) -> tuple[Optional[str], Optional[dict], Optional[dict]]:
-    """Voice transcription, Model Armor screening and memory recall, overlapped where possible.
+class _Gate:
+    """Buffers SSE events until the Model Armor verdict, then flushes them (allowed) or drops them (blocked)."""
 
-    Returns (message or None if the voice note could not be understood, guardrail, memory)."""
+    def __init__(self, ch: EventChannel, is_open: bool):
+        self.ch, self.is_open, self.buf, self.dropped = ch, is_open, [], False
+
+    def emit(self, event: str, data) -> None:
+        if self.dropped:
+            return
+        if self.is_open:
+            self.ch.emit(event, data)
+        else:
+            self.buf.append((event, data))
+
+    def open(self) -> None:
+        self.is_open = True
+        for e, d in self.buf:
+            self.ch.emit(e, d)
+        self.buf = []
+
+    def drop(self) -> None:
+        self.dropped, self.buf = True, []
+
+
+async def _await_verdict(tool, args, tool_context: ToolContext):
+    """before_tool_callback: no tool (reserve, waitlist, ...) runs before the Model Armor verdict."""
+    t = get_turn(tool_context.session.id)
+    gt = t.extra.get("guard_task") if t else None
+    if gt is not None:
+        try:
+            res = await asyncio.shield(gt)
+        except Exception:
+            return None
+        if res.get("verdict") == "blocked":
+            return {"error": "This request cannot be processed."}
+    return None
+
+
+def _session_store(session_id: str):
+    try:
+        return runner().session_service.sessions[APP_NAME][session_id][session_id]
+    except Exception:
+        return None
+
+
+def _rollback(session_id: str, n_events: int) -> None:
+    """Remove this turn's events (a blocked prompt must not stay in the conversation history)."""
+    s = _session_store(session_id)
+    if s is not None:
+        try:
+            removed = len(s.events) - n_events
+            del s.events[n_events:]
+            log("INFO", "session rolled back after block", events_removed=removed, events_kept=len(s.events))
+        except Exception as e:
+            log("WARNING", "session rollback failed", error=type(e).__name__)
+
+
+def _record_memory(session_id: str, task: asyncio.Task) -> None:
+    if task.cancelled() or task.exception() is not None:
+        return
+    mem = task.result()
+    if mem and mem.get("summary"):
+        _has_memory.add(session_id)
+        _no_memory.discard(session_id)
+    elif session_id not in _has_memory:
+        _no_memory.add(session_id)
+
+
+async def _screen(g, message: str, t: TurnState) -> dict:
+    from ..tracing import span
+
+    with span("model_armor.sanitize_user_prompt"):
+        res = await g.screen(message)
+    t.extra["guard_ms"] = res.get("latency_ms")
+    return res
+
+
+async def _prelude(ch: EventChannel, t: TurnState, message: str, audio: Optional[bytes], audio_mime: Optional[str],
+                   session_id: str, timings: dict) -> tuple[Optional[str], Optional[asyncio.Task], Optional[dict]]:
+    """Voice transcription first; then the Model Armor screen and the memory recall run concurrently.
+
+    Returns (message or None if a voice note was not understood, the running guard task, memory or None).
+    The memory recall only holds up the turn for shoppers known to have memories; otherwise it finishes in
+    the background and is recorded for their next turn."""
     mem_mod = _memory_mod()
-    # Skip the recall for shoppers known to have no memories yet (cleared when they state a preference).
-    skip = session_id in _no_memory
-    mem_task = asyncio.create_task(mem_mod.recall(session_id, message or "")) if mem_mod and not skip else None
+    mem_task = (asyncio.create_task(mem_mod.recall(session_id, message or ""))
+                if mem_mod and session_id not in _no_memory else None)
     if audio:
         from ..voice import transcribe
-
         from ..tracing import span
 
+        tt = time.monotonic()
         try:
             with span("voice.transcribe", mime=audio_mime or ""):
                 tr = await transcribe(audio, audio_mime)
         except Exception as e:
             log("WARNING", "voice transcription failed", error=type(e).__name__, detail=str(e)[:200])
             tr = {"text": "", "language": "en"}
+        timings["transcribe_ms"] = int((time.monotonic() - tt) * 1000)
         ch.emit("activity", {"id": "a_voice", "tool": "transcribe", "label": "Listening to your voice note", "status": "end"})
         if not tr["text"]:
             if mem_task:
@@ -489,31 +570,20 @@ async def _prelude(ch: EventChannel, t: TurnState, message: str, audio: Optional
         t.extra["language"] = tr["language"]
         message = f"{message}\n{tr['text']}".strip() if message else tr["text"]
         ch.emit("activity", {"id": "a0", "tool": "understand", "label": "Understanding your request", "status": "start"})
-    guardrail = None
     g = _guard_mod()
-    if g and message:
-        from ..tracing import span
-
-        with span("model_armor.sanitize_user_prompt"):
-            res = await g.screen(message)
-        t.extra["guard_ms"] = res.get("latency_ms")
-        guardrail = {"provider": "model_armor", "verdict": res["verdict"]}
-        if res["verdict"] == "blocked":
-            guardrail["categories"] = res.get("categories", [])
-            if mem_task:
-                mem_task.cancel()
-            return message, guardrail, None
-        if res["verdict"] != "allowed":
-            guardrail = None  # fail open: no claim either way
+    guard_task = asyncio.create_task(_screen(g, message, t)) if g and message else None
     mem = None
+    timings["memory_ms"] = 0
     if mem_task:
-        try:
-            mem = await asyncio.wait_for(mem_task, 1.6)
-        except Exception:
-            mem = None
-        if mem is None or not mem.get("summary"):
-            _no_memory.add(session_id)
-    return message, guardrail, mem
+        if session_id in _has_memory:
+            tm = time.monotonic()
+            try:
+                mem = await asyncio.wait_for(asyncio.shield(mem_task), 1.6)
+            except Exception:
+                mem = None
+            timings["memory_ms"] = int((time.monotonic() - tm) * 1000)
+        mem_task.add_done_callback(lambda tk, sid=session_id: _record_memory(sid, tk))
+    return message, guard_task, mem
 
 
 async def _produce(ch: EventChannel, session_id: str, message: str, store_id: str,
@@ -536,25 +606,22 @@ async def _produce(ch: EventChannel, session_id: str, message: str, store_id: st
         spec: dict = {"task": None, "n_tools": 0}
         guardrail = None
         memory_used = None
+        timings: dict = {}
         try:
             if new_chat:
                 await _reset_session(session_id)
-            msg, guardrail, memory_used = await _prelude(ch, t, message, audio, audio_mime, session_id)
+            msg, guard_task, memory_used = await _prelude(ch, t, message, audio, audio_mime, session_id, timings)
             if msg is None:
                 status = "no_speech"
                 ch.emit("text", {"delta": "Sorry, I couldn't hear that clearly. Could you try the voice note again, or type your request?"})
                 raise _TurnDone()
             message = msg
-            if guardrail and guardrail["verdict"] == "blocked":
-                status = "blocked"
-                from .. import guard
-
-                ch.emit("text", {"delta": guard.refusal(_lang(message))})
-                log("WARNING", "guardrail blocked chat", categories=guardrail.get("categories"))
-                raise _TurnDone()
+            t.extra["guard_task"] = guard_task
+            gate = _Gate(ch, is_open=guard_task is None)
             if memory_used and memory_used.get("summary"):
-                ch.emit("memory", {"summary": memory_used["summary"], "preferences": memory_used.get("preferences", [])})
+                gate.emit("memory", {"summary": memory_used["summary"], "preferences": memory_used.get("preferences", [])})
             created = await _ensure_session(session_id)
+            n_events = len(getattr(_session_store(session_id), "events", []) or [])
             parts = []
             if image:
                 parts.append(types.Part.from_bytes(data=image, mime_type=image_mime or "image/jpeg"))
@@ -573,7 +640,7 @@ async def _produce(ch: EventChannel, session_id: str, message: str, store_id: st
                 async for ev in agen:
                     if first_output:
                         first_output = False
-                        ch.emit("activity", {"id": "a0", "tool": "understand", "label": "Understanding your request", "status": "end"})
+                        gate.emit("activity", {"id": "a0", "tool": "understand", "label": "Understanding your request", "status": "end"})
                     if not ev.content or not ev.content.parts:
                         continue
                     if ev.partial:
@@ -584,7 +651,7 @@ async def _produce(ch: EventChannel, session_id: str, message: str, store_id: st
                             partial_text_seen = True
                             t.text_in_current_response = True
                             t.total_text += delta
-                            ch.emit("text", {"delta": delta})
+                            gate.emit("text", {"delta": delta})
                         continue
                     # aggregated (non-partial) events
                     if not partial_text_seen:
@@ -594,9 +661,9 @@ async def _produce(ch: EventChannel, session_id: str, message: str, store_id: st
                                 full = "\n\n" + full
                             t.total_text += full
                             t.text_in_current_response = True
-                            ch.emit("text", {"delta": full})
+                            gate.emit("text", {"delta": full})
                     for fc in ev.get_function_calls():
-                        ch.emit("activity", {"id": fc.id or fc.name, "tool": fc.name,
+                        gate.emit("activity", {"id": fc.id or fc.name, "tool": fc.name,
                                              "label": _activity_label(fc.name, fc.args or {}, t), "status": "start"})
                     frs = ev.get_function_responses()
                     if spec["task"] is None and any(fr.name in ("search_products", "get_alternatives", "check_availability") for fr in frs):
@@ -605,16 +672,47 @@ async def _produce(ch: EventChannel, session_id: str, message: str, store_id: st
                         spec["n_tools"] = len(t.tool_log)
                         spec["task"] = asyncio.create_task(safe_extract(t, message))
                     for fr in frs:
-                        ch.emit("activity", {"id": fr.id or fr.name, "tool": fr.name,
+                        gate.emit("activity", {"id": fr.id or fr.name, "tool": fr.name,
                                              "label": _activity_label(fr.name, {}, t), "status": "end"})
                         if fr.name == "show_products" and t.pending_products:
-                            ch.emit("products", {"items": t.pending_products})
+                            gate.emit("products", {"items": t.pending_products})
                             t.pending_products = []
                     if frs:
                         t.text_in_current_response = False
                     partial_text_seen = False
 
-            await asyncio.wait_for(consume(), timeout=config.CHAT_TURN_TIMEOUT_S)
+            # The model starts thinking while Model Armor screens the message (tools and output wait for it).
+            t_agent = time.monotonic()
+            agent_task = asyncio.create_task(consume())
+            if guard_task is not None:
+                res = await guard_task
+                timings["guard_ms"] = res.get("latency_ms")
+                if res["verdict"] in ("allowed", "blocked"):
+                    guardrail = {"provider": "model_armor", "verdict": res["verdict"]}
+                if res["verdict"] == "blocked":
+                    guardrail["categories"] = res.get("categories", [])
+                    gate.drop()
+                    agent_task.cancel()
+                    try:
+                        await agent_task
+                    except BaseException:
+                        pass
+                    try:
+                        await agen.aclose()
+                    except BaseException:
+                        pass
+                    _rollback(session_id, n_events)
+                    status = "blocked"
+                    from .. import guard
+
+                    ch.emit("text", {"delta": guard.refusal(_lang(message))})
+                    log("WARNING", "guardrail blocked chat", categories=guardrail.get("categories"))
+                    raise _TurnDone()
+                gate.open()
+            try:
+                await asyncio.wait_for(agent_task, timeout=max(1.0, config.CHAT_TURN_TIMEOUT_S - (time.monotonic() - t_agent)))
+            finally:
+                timings["agent_ms"] = int((time.monotonic() - t_agent) * 1000)
         except _TurnDone:
             pass
         except asyncio.TimeoutError:
@@ -626,7 +724,7 @@ async def _produce(ch: EventChannel, session_id: str, message: str, store_id: st
             ch.emit("error", {"message": "Sorry, something went wrong on our side. Please try again.", "retryable": True})
         if status in ("blocked", "no_speech"):
             latency = int((time.monotonic() - t0) * 1000)
-            done = {"latency_ms": latency, "model": config.MODEL_AGENT, "session_id": session_id}
+            done = {"latency_ms": latency, "model": config.MODEL_AGENT, "session_id": session_id, "timings": timings}
             if guardrail:
                 done["guardrail"] = guardrail
             ch.emit("done", done)
@@ -714,6 +812,7 @@ async def _produce(ch: EventChannel, session_id: str, message: str, store_id: st
             return await store_signal(sig)
 
         sig_task = asyncio.create_task(final_signal())
+        t_ex = time.monotonic()
         try:
             done, _ = await asyncio.wait({sig_task}, timeout=config.EXTRACTOR_WAIT_S)
             if sig_task in done and sig_task.result():
@@ -721,8 +820,11 @@ async def _produce(ch: EventChannel, session_id: str, message: str, store_id: st
         except Exception as e:
             log("WARNING", "signal extraction failed", error=type(e).__name__)
 
+        timings["extract_wait_ms"] = int((time.monotonic() - t_ex) * 1000)
         latency = int((time.monotonic() - t0) * 1000)
-        done = {"latency_ms": latency, "model": model_used, "session_id": session_id}
+        done = {"latency_ms": latency, "model": model_used, "session_id": session_id,
+                "timings": {k: timings.get(k) for k in ("guard_ms", "memory_ms", "agent_ms", "extract_wait_ms", "transcribe_ms")
+                            if timings.get(k) is not None}}
         if guardrail:
             done["guardrail"] = guardrail
         ch.emit("done", done)
@@ -733,13 +835,14 @@ async def _produce(ch: EventChannel, session_id: str, message: str, store_id: st
             try:
                 if getattr(mem_mod, "has_preference_cue", lambda _x: True)(message):
                     _no_memory.discard(session_id)
+                    _has_memory.add(session_id)
                 mem_mod.remember_async(session_id, message, t.total_text)
             except Exception as e:
                 log("WARNING", "memory write failed", error=type(e).__name__)
         log("INFO", "chat turn", route="/api/chat", latency_ms=latency, handler_start_ms=handler_start_ms,
             lock_wait_ms=lock_wait_ms, status=status, model=model_used,
             products=len(t.cards), dropped=len(t.dropped_skus), image=bool(image), voice=bool(audio),
-            memory=bool(memory_used), guard_ms=t.extra.get("guard_ms"), fallback=bool(tctx.get("fallback")))
+            memory=bool(memory_used), timings=timings, fallback=bool(tctx.get("fallback")))
         TURNS.pop(session_id, None)
 
 
