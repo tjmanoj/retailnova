@@ -385,6 +385,7 @@ async def radar(store_id: str, category: Optional[str]) -> dict:
         })
 
     recent = [r for r in sigs][:20]
+    revenue_protected = await _revenue_protected(store_id)
     return {
         "store_id": store_id,
         "as_of": config.DEMO_TODAY,
@@ -395,8 +396,49 @@ async def radar(store_id: str, category: Optional[str]) -> dict:
             "stockouts_now": int(stockouts),
             "signals_today": int(today_sigs),
             "forecast_gap_units_21d": int(round(gap21)),
+            "revenue_protected_inr": int(revenue_protected),
         },
         "top_gaps": top,
+        "assortment_gaps": assortment_gaps(sigs, category),
         "series": series,
         "recent_signals": recent,
     }
+
+
+async def _revenue_protected(store_id: str) -> int:
+    """§9.7: sum of expected_revenue_protected_inr over executed actions for the store (reset deletes actions)."""
+    from google.cloud.firestore_v1.base_query import FieldFilter
+
+    try:
+        q = fs().collection("actions").where(filter=FieldFilter("store_id", "==", store_id))
+        return sum(int((d.to_dict() or {}).get("expected_revenue_protected_inr") or 0)
+                   async for d in q.stream() if (d.to_dict() or {}).get("status") == "executed")
+    except Exception:
+        return 0
+
+
+def assortment_gaps(sigs: list[dict], category: Optional[str] = None, days: int = 7, limit: int = 5) -> list[dict]:
+    """§9.7: what customers ask for that the store does not sell (not_carried signals, last 7 days)."""
+    groups: dict[tuple, dict] = {}
+    for r in sigs:
+        if r.get("reason") != "not_carried" or not _in_window(r, days):
+            continue
+        if category and r.get("category") != category:
+            continue
+        a = r.get("attributes") or {}
+        item = (a.get("item") or "").strip().lower()
+        if item:
+            label = item
+        else:
+            label = " ".join(x for x in [a.get("color", ""), a.get("material", ""),
+                                         config.CATEGORY_LABEL.get(r.get("category"), r.get("category") or "").lower()] if x)
+        key = (r.get("category"), label)
+        g = groups.setdefault(key, {"label": label[:1].upper() + label[1:], "category": r.get("category"),
+                                    "asks_7d": 0, "est_value_7d_inr": 0, "examples": []})
+        g["asks_7d"] += int(r.get("quantity") or 1)
+        g["est_value_7d_inr"] += int(r.get("est_value_inr") or 0)
+        ex = (r.get("summary") or "").strip()
+        if ex and ex not in g["examples"] and len(g["examples"]) < 3:
+            g["examples"].append(ex[:120])
+    out = sorted(groups.values(), key=lambda g: (-g["asks_7d"], -g["est_value_7d_inr"]))
+    return out[:limit]

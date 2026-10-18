@@ -6,3 +6,5 @@ google-cloud-bigquery==3.46.2
 fastapi==0.141.1
 uvicorn==0.54.0
 pydantic==2.14.1
+google-cloud-agentplatform==2.5.0
+opentelemetry-exporter-gcp-trace==1.15.0

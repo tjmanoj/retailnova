@@ -141,6 +141,27 @@ async def _produce(ch: EventChannel, store_id: str, question: str, session_id: O
     turn_ctx.set(tctx)
     status = "ok"
     any_text = False
+    guardrail = None
+    try:
+        from .. import guard
+
+        if guard.ENABLED:
+            g = await guard.screen(question)
+            if g["verdict"] == "blocked":
+                guardrail = guard.guardrail(g)
+                ch.emit("activity", {"id": "a0", "tool": "understand", "label": "Reading your question", "status": "end"})
+                ch.emit("text", {"delta": "I can only help with store operations: demand, forecasts, inventory and actions. "
+                                          "Try asking about unmet demand or a Diwali action plan."})
+                latency = int((time.monotonic() - t0) * 1000)
+                ch.emit("done", {"latency_ms": latency, "model": config.MODEL_AGENT, "session_id": session_id,
+                                 "guardrail": guardrail})
+                ch.close()
+                log("WARNING", "guardrail blocked ask", categories=g.get("categories"), latency_ms=latency)
+                return
+            if g["verdict"] == "allowed":
+                guardrail = guard.guardrail(g)
+    except Exception as e:
+        log("WARNING", "ask guard failed", error=type(e).__name__)
     try:
         r = runner()
         if await r.session_service.get_session(app_name=APP_NAME, user_id=sid, session_id=sid) is None:
@@ -190,6 +211,9 @@ async def _produce(ch: EventChannel, store_id: str, question: str, session_id: O
     models = tctx.get("models") or set()
     model = config.MODEL_LITE if (tctx.get("fallback") and len(models) == 1) else config.MODEL_AGENT
     latency = int((time.monotonic() - t0) * 1000)
-    ch.emit("done", {"latency_ms": latency, "model": model, "session_id": session_id})
+    done = {"latency_ms": latency, "model": model, "session_id": session_id}
+    if guardrail:
+        done["guardrail"] = guardrail
+    ch.emit("done", done)
     ch.close()
     log("INFO", "ask", route="/api/ask", latency_ms=latency, status=status, model=model)

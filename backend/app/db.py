@@ -25,8 +25,23 @@ if not _logger.handlers:
     _logger.propagate = False
 
 
+def _trace_fields() -> dict:
+    """Cloud Logging <-> Cloud Trace correlation when a span is active."""
+    try:
+        from opentelemetry import trace
+
+        ctx = trace.get_current_span().get_span_context()
+        if ctx and ctx.is_valid:
+            tid = format(ctx.trace_id, "032x")
+            return {"logging.googleapis.com/trace": f"projects/{config.PROJECT}/traces/{tid}",
+                    "logging.googleapis.com/spanId": format(ctx.span_id, "016x"), "trace_id": tid}
+    except Exception:
+        pass
+    return {}
+
+
 def log(severity: str = "INFO", msg: str = "", **fields: Any) -> None:
-    rec = {"severity": severity, "message": msg, "time": now_iso(), **fields}
+    rec = {"severity": severity, "message": msg, "time": now_iso(), **fields, **_trace_fields()}
     try:
         _logger.info(json.dumps(rec, default=str, ensure_ascii=False))
     except Exception:  # never let logging break a request

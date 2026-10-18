@@ -339,7 +339,12 @@ Rules:
 
 def _instruction(ctx: ReadonlyContext) -> str:
     sid = ctx.state.get("store_id", config.DEFAULT_STORE)
-    return BASE_INSTRUCTION + f"\nThe shopper's selected store is {config.store_name(sid)} ({sid}). Use it for stock unless they name another store."
+    out = BASE_INSTRUCTION + f"\nThe shopper's selected store is {config.store_name(sid)} ({sid}). Use it for stock unless they name another store."
+    mem = ctx.state.get("memory_summary") or ""
+    if mem:
+        out += ("\nRemembered preferences of this shopper from earlier chats (use them to personalise search filters and "
+                f"picks when the request is open-ended; the current request always wins): {mem}")
+    return out
 
 
 _runner: InMemoryRunner | None = None
@@ -361,7 +366,23 @@ def runner() -> InMemoryRunner:
 
 _session_locks: dict[str, asyncio.Lock] = {}
 _session_signals: dict[str, dict] = {}
+_no_memory: set[str] = set()
 _known_sessions: set[str] = set()
+
+
+class _TurnDone(Exception):
+    """Ends a turn early (guardrail block, unintelligible voice note)."""
+
+
+async def _reset_session(session_id: str) -> None:
+    """New chat for the same shopper: drop the conversation history (memory is kept)."""
+    r = runner()
+    try:
+        if await r.session_service.get_session(app_name=APP_NAME, user_id=session_id, session_id=session_id):
+            await r.session_service.delete_session(app_name=APP_NAME, user_id=session_id, session_id=session_id)
+    except Exception as e:
+        log("WARNING", "session reset failed", error=type(e).__name__)
+    _session_signals.pop(session_id, None)
 
 
 async def _ensure_session(session_id: str) -> bool:
@@ -396,13 +417,17 @@ def _activity_label(name: str, args: dict, t: TurnState) -> str:
 
 
 def run_chat(session_id: str, message: str, store_id: str, image: Optional[bytes], image_mime: Optional[str],
-             t0: Optional[float] = None) -> AsyncIterator[str]:
+             t0: Optional[float] = None, audio: Optional[bytes] = None, audio_mime: Optional[str] = None,
+             new_chat: bool = False) -> AsyncIterator[str]:
     """`t0` is the request-arrival time (monotonic), so latency_ms includes any time before the handler ran."""
     ch = EventChannel()
     t0 = t0 or time.monotonic()
-    ch.emit("activity", {"id": "a0", "tool": "understand",
-                         "label": "Looking at your photo" if image else "Understanding your request", "status": "start"})
-    task = asyncio.create_task(_produce(ch, session_id, message, store_id, image, image_mime, t0))
+    if audio:
+        ch.emit("activity", {"id": "a_voice", "tool": "transcribe", "label": "Listening to your voice note", "status": "start"})
+    else:
+        ch.emit("activity", {"id": "a0", "tool": "understand",
+                             "label": "Looking at your photo" if image else "Understanding your request", "status": "start"})
+    task = asyncio.create_task(_produce(ch, session_id, message, store_id, image, image_mime, t0, audio, audio_mime, new_chat))
 
     async def gen():
         try:
@@ -416,8 +441,84 @@ def run_chat(session_id: str, message: str, store_id: str, image: Optional[bytes
     return gen()
 
 
+def _guard_mod():
+    try:
+        from .. import guard
+
+        return guard if guard.ENABLED else None
+    except Exception:
+        return None
+
+
+def _memory_mod():
+    try:
+        from .. import memory
+
+        return memory if memory.BACKEND else None
+    except Exception:
+        return None
+
+
+async def _prelude(ch: EventChannel, t: TurnState, message: str, audio: Optional[bytes], audio_mime: Optional[str],
+                   session_id: str) -> tuple[Optional[str], Optional[dict], Optional[dict]]:
+    """Voice transcription, Model Armor screening and memory recall, overlapped where possible.
+
+    Returns (message or None if the voice note could not be understood, guardrail, memory)."""
+    mem_mod = _memory_mod()
+    # Skip the recall for shoppers known to have no memories yet (cleared when they state a preference).
+    skip = session_id in _no_memory
+    mem_task = asyncio.create_task(mem_mod.recall(session_id, message or "")) if mem_mod and not skip else None
+    if audio:
+        from ..voice import transcribe
+
+        from ..tracing import span
+
+        try:
+            with span("voice.transcribe", mime=audio_mime or ""):
+                tr = await transcribe(audio, audio_mime)
+        except Exception as e:
+            log("WARNING", "voice transcription failed", error=type(e).__name__, detail=str(e)[:200])
+            tr = {"text": "", "language": "en"}
+        ch.emit("activity", {"id": "a_voice", "tool": "transcribe", "label": "Listening to your voice note", "status": "end"})
+        if not tr["text"]:
+            if mem_task:
+                mem_task.cancel()
+            return None, None, None
+        ch.emit("transcript", {"text": tr["text"], "language": tr["language"]})
+        t.channel = "voice"
+        t.extra["language"] = tr["language"]
+        message = f"{message}\n{tr['text']}".strip() if message else tr["text"]
+        ch.emit("activity", {"id": "a0", "tool": "understand", "label": "Understanding your request", "status": "start"})
+    guardrail = None
+    g = _guard_mod()
+    if g and message:
+        from ..tracing import span
+
+        with span("model_armor.sanitize_user_prompt"):
+            res = await g.screen(message)
+        t.extra["guard_ms"] = res.get("latency_ms")
+        guardrail = {"provider": "model_armor", "verdict": res["verdict"]}
+        if res["verdict"] == "blocked":
+            guardrail["categories"] = res.get("categories", [])
+            if mem_task:
+                mem_task.cancel()
+            return message, guardrail, None
+        if res["verdict"] != "allowed":
+            guardrail = None  # fail open: no claim either way
+    mem = None
+    if mem_task:
+        try:
+            mem = await asyncio.wait_for(mem_task, 1.6)
+        except Exception:
+            mem = None
+        if mem is None or not mem.get("summary"):
+            _no_memory.add(session_id)
+    return message, guardrail, mem
+
+
 async def _produce(ch: EventChannel, session_id: str, message: str, store_id: str,
-                   image: Optional[bytes], image_mime: Optional[str], t0: float) -> None:
+                   image: Optional[bytes], image_mime: Optional[str], t0: float,
+                   audio: Optional[bytes] = None, audio_mime: Optional[str] = None, new_chat: bool = False) -> None:
     lock = _session_locks.setdefault(session_id, asyncio.Lock())
     model_used = config.MODEL_AGENT
     status = "ok"
@@ -433,7 +534,26 @@ async def _produce(ch: EventChannel, session_id: str, message: str, store_id: st
         first_output = True
         partial_text_seen = False
         spec: dict = {"task": None, "n_tools": 0}
+        guardrail = None
+        memory_used = None
         try:
+            if new_chat:
+                await _reset_session(session_id)
+            msg, guardrail, memory_used = await _prelude(ch, t, message, audio, audio_mime, session_id)
+            if msg is None:
+                status = "no_speech"
+                ch.emit("text", {"delta": "Sorry, I couldn't hear that clearly. Could you try the voice note again, or type your request?"})
+                raise _TurnDone()
+            message = msg
+            if guardrail and guardrail["verdict"] == "blocked":
+                status = "blocked"
+                from .. import guard
+
+                ch.emit("text", {"delta": guard.refusal(_lang(message))})
+                log("WARNING", "guardrail blocked chat", categories=guardrail.get("categories"))
+                raise _TurnDone()
+            if memory_used and memory_used.get("summary"):
+                ch.emit("memory", {"summary": memory_used["summary"], "preferences": memory_used.get("preferences", [])})
             created = await _ensure_session(session_id)
             parts = []
             if image:
@@ -444,7 +564,7 @@ async def _produce(ch: EventChannel, session_id: str, message: str, store_id: st
                 user_id=session_id,
                 session_id=session_id,
                 new_message=content,
-                state_delta={"store_id": store_id},
+                state_delta={"store_id": store_id, "memory_summary": (memory_used or {}).get("summary", "")},
                 run_config=RunConfig(streaming_mode=StreamingMode.SSE),
             )
 
@@ -495,6 +615,8 @@ async def _produce(ch: EventChannel, session_id: str, message: str, store_id: st
                     partial_text_seen = False
 
             await asyncio.wait_for(consume(), timeout=config.CHAT_TURN_TIMEOUT_S)
+        except _TurnDone:
+            pass
         except asyncio.TimeoutError:
             status = "timeout"
             ch.emit("error", {"message": "Sorry, that took too long. Please try again.", "retryable": True})
@@ -502,6 +624,17 @@ async def _produce(ch: EventChannel, session_id: str, message: str, store_id: st
             status = "error"
             log("ERROR", "chat turn failed", error=type(e).__name__, detail=str(e)[:300])
             ch.emit("error", {"message": "Sorry, something went wrong on our side. Please try again.", "retryable": True})
+        if status in ("blocked", "no_speech"):
+            latency = int((time.monotonic() - t0) * 1000)
+            done = {"latency_ms": latency, "model": config.MODEL_AGENT, "session_id": session_id}
+            if guardrail:
+                done["guardrail"] = guardrail
+            ch.emit("done", done)
+            ch.close()
+            log("INFO", "chat turn", route="/api/chat", latency_ms=latency, handler_start_ms=handler_start_ms,
+                lock_wait_ms=lock_wait_ms, status=status, voice=bool(audio))
+            TURNS.pop(session_id, None)
+            return
 
         # Safety net: the model talked about products but forgot show_products.
         if status == "ok" and not t.cards and t.seen_skus:
@@ -589,12 +722,24 @@ async def _produce(ch: EventChannel, session_id: str, message: str, store_id: st
             log("WARNING", "signal extraction failed", error=type(e).__name__)
 
         latency = int((time.monotonic() - t0) * 1000)
-        ch.emit("done", {"latency_ms": latency, "model": model_used, "session_id": session_id})
+        done = {"latency_ms": latency, "model": model_used, "session_id": session_id}
+        if guardrail:
+            done["guardrail"] = guardrail
+        ch.emit("done", done)
         ch.close()
         asyncio.create_task(_upsert_conversation(session_id, store_id, message, t))
+        mem_mod = _memory_mod()
+        if mem_mod and status == "ok":
+            try:
+                if getattr(mem_mod, "has_preference_cue", lambda _x: True)(message):
+                    _no_memory.discard(session_id)
+                mem_mod.remember_async(session_id, message, t.total_text)
+            except Exception as e:
+                log("WARNING", "memory write failed", error=type(e).__name__)
         log("INFO", "chat turn", route="/api/chat", latency_ms=latency, handler_start_ms=handler_start_ms,
             lock_wait_ms=lock_wait_ms, status=status, model=model_used,
-            products=len(t.cards), dropped=len(t.dropped_skus), image=bool(image), fallback=bool(tctx.get("fallback")))
+            products=len(t.cards), dropped=len(t.dropped_skus), image=bool(image), voice=bool(audio),
+            memory=bool(memory_used), guard_ms=t.extra.get("guard_ms"), fallback=bool(tctx.get("fallback")))
         TURNS.pop(session_id, None)
 
 

@@ -34,7 +34,7 @@ class DemandSignal(BaseModel):
     source: Literal["live","simulated"]
     session_id: Optional[str] = None
     store_id: str
-    channel: Literal["chat","image_search","store_assist"]
+    channel: Literal["chat","image_search","store_assist","voice"]   # "voice" added in §9.2
     category: Category
     sku: Optional[str] = None         # requested or closest SKU
     attributes: dict[str, str] = {}   # color, size, material, occasion
@@ -60,6 +60,7 @@ class Evidence(BaseModel):
     kind: Literal["forecast","signals","inventory","trend"]
     text: str
     value: Optional[float] = None
+    url: Optional[str] = None                     # §9.4: trend evidence source
 
 class ActionProposal(BaseModel):
     action_id: str
@@ -103,6 +104,9 @@ class ChatRequest(BaseModel):
     image_base64: Optional[str] = None
     image_mime: Optional[Literal["image/jpeg", "image/png", "image/webp"]] = None
     language_hint: Optional[Literal["auto", "en", "hi", "ta"]] = "auto"
+    new_chat: bool = False                        # start a fresh conversation (memory is kept)
+    audio_base64: Optional[str] = None            # §9.2 voice note
+    audio_mime: Optional[Literal["audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg", "audio/wav"]] = None
 
 
 class ItemRequest(BaseModel):
@@ -118,6 +122,17 @@ class PlanRequest(BaseModel):
     horizon_days: int = 21
     question: Optional[str] = None
     session_id: Optional[str] = None  # optional, only used for rate limiting
+
+
+class AssistRequest(BaseModel):              # §9.3 store assist
+    store_id: str = "CHN-TNG"
+    text: Optional[str] = None
+    audio_base64: Optional[str] = None
+    audio_mime: Optional[Literal["audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg", "audio/wav"]] = None
+
+
+class ForgetRequest(BaseModel):              # §9.6
+    session_id: str
 
 
 class AskRequest(BaseModel):

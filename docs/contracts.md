@@ -415,3 +415,19 @@ These clarify behaviour already implied above; nothing earlier in this file chan
 
 ### 9.8 Morning brief
 The UI calls `POST /api/ask` with the question "Give me my morning brief for {store}: what changed, top 3 risks before Diwali, and the 3 actions I should take today." No new endpoint is needed.
+
+### 9.9 Backend notes for v1.1 (additive)
+- **`POST /api/chat` `new_chat?: bool`** (default false) starts a fresh conversation for the same `session_id`: the conversation history is dropped and remembered preferences (§9.6) are kept. Use it for a "New chat" button.
+- **Voice.** The flow is `activity` ("Listening to your voice note") → `transcript` → the usual events. The reply works from the transcript, so the signal and the Model Armor check use the transcript too. If nothing intelligible was heard, the turn returns a short "could not hear" `text` and `done` (no `error` event).
+- **Guardrail.**
+  - `done.guardrail` is `{provider: "model_armor", verdict: "allowed"}` on screened turns. It is absent when Model Armor was unavailable (the screen fails open).
+  - A blocked `/api/assist` returns `{signal: null, transcript, message, guardrail}`.
+  - The template lives in asia-south1, which does not offer the malicious-URI filter. Prompt-injection, jailbreak and responsible-AI filters are on.
+- **Memory.** The `memory` event comes after `activity`/`transcript` and before the reply text. A preference stated in one turn is usable from the next turn: Memory Bank writes take a few seconds.
+- **Trends.**
+  - The step starts with the other steps. When it is ready in time, the planner uses it. Otherwise it is attached as `kind: "trend"` evidence on proposals, with `url` set to the first grounded source (a Google grounding redirect URL).
+  - A cold fetch takes about 5–7 s; results are cached for 60 min per (city, category).
+- **Store assist.**
+  - When staff report the customer left without buying, but the system shows stock at that store, the signal stays `unmet` with `reason: "other"`, plus `attributes.stock_check` (for example "system shows 12 in stock"), as a shelf-accuracy flag.
+  - Signals may carry `attributes.item` (e.g. "lehenga choli"); `assortment_gaps` groups by it.
+- **Log and trace correlation.** Structured log lines carry `trace_id` and `logging.googleapis.com/trace` when Cloud Trace is on.

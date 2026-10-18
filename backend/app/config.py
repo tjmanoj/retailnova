@@ -19,7 +19,7 @@ def _env_bool(name: str, default: bool) -> bool:
     return v.strip().lower() in ("1", "true", "yes", "on")
 
 
-VERSION = os.getenv("APP_VERSION", "0.1.0")
+VERSION = os.getenv("APP_VERSION", "1.1.0")
 PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT", "retailnova-ai")
 BQ_DATASET = os.getenv("BQ_DATASET", "retailnova")
 BQ_LOCATION = os.getenv("REGION", "asia-south1")
@@ -49,7 +49,10 @@ PLANNER_TOTAL_TIMEOUT_S = float(os.getenv("PLANNER_TOTAL_TIMEOUT_S", "16"))
 EXTRACTOR_WAIT_S = float(os.getenv("EXTRACTOR_WAIT_S", "5"))
 CHAT_TURN_TIMEOUT_S = float(os.getenv("CHAT_TURN_TIMEOUT_S", "35"))
 
-ENABLE_TRENDS = _env_bool("ENABLE_TRENDS", False)
+ENABLE_TRENDS = _env_bool("ENABLE_TRENDS", True)
+ENABLE_VOICE = _env_bool("ENABLE_VOICE", True)
+ENABLE_STORE_ASSIST = _env_bool("ENABLE_STORE_ASSIST", True)
+GUIDED_DEMO = _env_bool("GUIDED_DEMO", True)
 WARM_ON_STARTUP = _env_bool("WARM_ON_STARTUP", True)
 ALLOWED_ORIGINS = [o for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o]
 

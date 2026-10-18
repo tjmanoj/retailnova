@@ -14,14 +14,38 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from . import config
 from .db import cache, clean_doc, fs, log, now_iso
 from .limits import ApiError, chat_limiter, check_message, decode_image, plan_limiter
-from .models import AskRequest, ChatRequest, ItemRequest, PlanRequest
+from .models import AskRequest, AssistRequest, ChatRequest, ForgetRequest, ItemRequest, PlanRequest
 from .sse import sse_response
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from . import tracing
+
+    tracing.setup()
     if config.WARM_ON_STARTUP:
+        async def warm_trends():
+            if not config.ENABLE_TRENDS:
+                return
+            try:  # market trends for the default store's hero category (60-min cache)
+                from .tools.trends import city_of, market_trends
+
+                await market_trends(city_of(config.DEFAULT_STORE), "sarees", timeout=25)
+            except Exception as e:
+                log("WARNING", "trends warm-up failed", error=type(e).__name__)
+
+        async def warm_memory():
+            try:
+                from . import memory
+
+                if memory.BACKEND:
+                    await memory.warm()
+            except Exception as e:
+                log("WARNING", "memory warm-up failed", error=type(e).__name__)
+
         async def warm():
+            asyncio.create_task(warm_trends())
+            asyncio.create_task(warm_memory())
             from .llm import warm_up
             from .tools import catalog
 
@@ -37,6 +61,13 @@ async def lifespan(app: FastAPI):
 
                 await asyncio.gather(ops.forecast_rows(config.DEFAULT_STORE), ops.sales_by_day(config.DEFAULT_STORE),
                                      ops.sku_velocity("sarees"), return_exceptions=True)
+            except Exception:
+                pass
+            try:  # Model Armor token + connection, and market trends for the default store's hero category
+                from . import guard
+
+                if guard.ENABLED:
+                    await guard.warm()
             except Exception:
                 pass
             try:  # build the agents so the first request does not pay for it
@@ -97,7 +128,10 @@ async def access_log(request: Request, call_next):
     request.state.t0 = t0
     if request.url.path != "/api/health":
         log("INFO", "request start", method=request.method, route=request.url.path)
-    response = await call_next(request)
+    from .tracing import span
+
+    with span(f"{request.method} {request.url.path}", **{"http.method": request.method, "http.route": request.url.path}):
+        response = await call_next(request)
     if request.url.path not in ("/api/chat", "/api/plan", "/api/ask"):  # streams log their own line
         log("INFO", "request", method=request.method, route=request.url.path, status=response.status_code,
             latency_ms=int((time.monotonic() - t0) * 1000))
@@ -122,9 +156,27 @@ def _check_store(store_id: Optional[str]) -> str:
 # Routes
 # ---------------------------------------------------------------------------
 
+def _features() -> dict:
+    """§9.1 feature flags (the UI hides what is off)."""
+    try:
+        from . import guard
+
+        armor = bool(guard.ENABLED)
+    except Exception:
+        armor = False
+    try:
+        from . import memory
+
+        mem = memory.BACKEND
+    except Exception:
+        mem = None
+    return {"voice": config.ENABLE_VOICE, "store_assist": config.ENABLE_STORE_ASSIST, "trends": config.ENABLE_TRENDS,
+            "model_armor": armor, "memory": mem, "guided_demo": config.GUIDED_DEMO}
+
+
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "version": config.VERSION, "time": now_iso()}
+    return {"status": "ok", "version": config.VERSION, "time": now_iso(), "features": _features()}
 
 
 @app.get("/api/bootstrap")
@@ -146,6 +198,7 @@ async def bootstrap():
         "categories": [{"category": c["category"], "label": c["label"]} for c in config.CATEGORIES],
         "sample_prompts": config.SAMPLE_PROMPTS,
         "reset_at": meta.get("reset_at"),
+        "features": _features(),
     }
 
 
@@ -153,14 +206,18 @@ async def bootstrap():
 async def chat(req: ChatRequest, request: Request):
     check_message(req.message)
     image = decode_image(req.image_base64)
+    from .voice import decode_audio
+
+    audio = decode_audio(req.audio_base64, req.audio_mime)
     chat_limiter.check(_session_key(request, req.session_id))
-    if not (req.message or "").strip() and not image:
-        raise ApiError(400, "empty_message", "Please type a message or attach a photo.")
+    if not (req.message or "").strip() and not image and not audio:
+        raise ApiError(400, "empty_message", "Please type a message, attach a photo or record a voice note.")
     store_id = _check_store(req.store_id)
     from .agents.concierge import run_chat
 
     return sse_response(run_chat(req.session_id, (req.message or "").strip(), store_id, image, req.image_mime,
-                                 t0=getattr(request.state, "t0", None)))
+                                 t0=getattr(request.state, "t0", None), audio=audio, audio_mime=req.audio_mime,
+                                 new_chat=req.new_chat))
 
 
 @app.post("/api/notify")
@@ -235,6 +292,51 @@ async def ask(req: AskRequest, request: Request):
     from .agents.manager_qa import run_ask
 
     return sse_response(run_ask(store_id, req.question.strip(), req.session_id, t0=getattr(request.state, "t0", None)))
+
+
+@app.post("/api/assist")
+async def assist(req: AssistRequest, request: Request):
+    """§9.3: staff log a walk-in customer's request (text or voice) as a store_assist demand signal."""
+    if req.text:
+        check_message(req.text)
+    from .voice import decode_audio
+
+    audio = decode_audio(req.audio_base64, req.audio_mime)
+    if not (req.text or "").strip() and not audio:
+        raise ApiError(400, "empty_request", "Please type or record what the customer asked for.")
+    chat_limiter.check("assist:" + _session_key(request, None))
+    store_id = _check_store(req.store_id)
+    from .agents.assist import run_assist
+
+    return await run_assist(store_id, req.text, audio, req.audio_mime, t0=getattr(request.state, "t0", None))
+
+
+@app.get("/api/profile")
+async def profile(session_id: str):
+    """§9.6: what Nova remembers about this shopper (preferences only)."""
+    try:
+        from . import memory
+
+        if memory.BACKEND:
+            return await memory.get_profile(session_id)
+    except ImportError:
+        pass
+    return {"session_id": session_id, "summary": "", "preferences": [], "source": None, "updated_at": None}
+
+
+@app.post("/api/profile/forget")
+async def profile_forget(req: ForgetRequest):
+    try:
+        from . import memory
+
+        if memory.BACKEND:
+            from .agents import concierge
+
+            concierge._no_memory.discard(req.session_id)
+            return await memory.forget(req.session_id)
+    except ImportError:
+        pass
+    return {"forgotten": True}
 
 
 @app.post("/api/actions/{action_id}/approve")

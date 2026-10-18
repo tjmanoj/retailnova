@@ -58,7 +58,7 @@ demand, live inventory and transfer options. Propose 2-4 concrete actions:
 Prioritise SKUs with the largest revenue at risk (shortfall x price) and strong, rising unmet demand. When a transfer
 covers only part of a shortfall, also propose a reorder for the rest. Use only SKUs, sizes, stores and numbers present in
 the data. Each rationale: one or two sentences, <= 280 chars, citing numbers. Evidence: 2-3 items (kinds: forecast,
-signals, inventory) with the key number in `value`. Summary: 2-3 sentences for the manager, plain English."""
+signals, inventory; add one "trend" item when market_trends are given) with the key number in `value`. Summary: 2-3 sentences for the manager, plain English."""
 
 
 def _infer_category(text: Optional[str]) -> Optional[str]:
@@ -204,28 +204,48 @@ async def _produce(ch: EventChannel, store_id: str, category: Optional[str], hor
                 log("WARNING", "transfers step failed", error=type(e).__name__, detail=str(e)[:160])
 
         async def s_trends():
+            # Runs alongside the other steps; never fails the plan (timeout/error -> skipped).
             if not config.ENABLE_TRENDS:
                 return
+            from ..tools.trends import city_of, market_trends
+
             try:
-                from google.genai import types
+                from ..tracing import span
 
-                r = await asyncio.wait_for(genai_client().aio.models.generate_content(
-                    model=config.MODEL_AGENT,
-                    contents=f"In 2 short sentences: what {config.CATEGORY_LABEL.get(category, category).lower()} "
-                             f"styles and colours are trending for Diwali 2026 in South India?",
-                    config=types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())],
-                                                       thinking_config=types.ThinkingConfig(thinking_level="LOW"))), 12)
-                results["trends"] = {"text": (r.text or "")[:400]}
-                emit("trends", "done", (r.text or "")[:200])
+                with span("plan.trends.google_search", category=category):
+                    tr = await market_trends(city_of(store_id), category, timeout=max(1.0, 10.0 - (time.monotonic() - t0)))
+                if not tr["insights"]:
+                    raise ValueError("no insights")
+                results["trends"] = tr
+                emit("trends", "done", tr["insights"][0], {"insights": tr["insights"], "sources": tr["sources"]})
             except Exception as e:
-                emit("trends", "error", "Trend check unavailable right now.")
-                log("WARNING", "trends step failed", error=type(e).__name__)
+                results["trends"] = None
+                emit("trends", "skipped", "Market trends were not available in time; the plan uses store data only.")
+                log("WARNING", "trends step skipped", error=type(e).__name__, detail=str(e)[:160])
 
-        await asyncio.gather(s_forecast(), s_unmet(), s_inventory(), s_transfers(), s_trends())
+        trends_task = asyncio.create_task(s_trends())
+        await asyncio.gather(s_forecast(), s_unmet(), s_inventory(), s_transfers())
 
-        # ---- planner ----
+        # ---- planner ---- (uses trends if they are already in; otherwise they are attached as evidence below)
         emit("planner", "running")
         proposals, summary, model_used = await _plan(store_id, category, horizon_days, question, results)
+        try:
+            await asyncio.wait_for(asyncio.shield(trends_task), max(0.05, 10.5 - (time.monotonic() - t0)))
+        except Exception:
+            pass
+        if results.get("trends"):
+            from ..tools.trends import evidence_for
+
+            prods = await catalog.products()
+            src_url = ((results["trends"].get("sources") or [{}])[0]).get("url")
+            for p in proposals:
+                for e in p["evidence"]:
+                    if e.get("kind") == "trend" and not e.get("url"):
+                        e["url"] = src_url
+                if not any(e.get("kind") == "trend" for e in p["evidence"]):
+                    ev = evidence_for(prods.get(p.get("sku") or ""), results["trends"])
+                    if ev:
+                        p["evidence"] = list(p["evidence"])[:3] + [ev]
         n_t = sum(1 for p in proposals if p["type"] == "transfer")
         n_r = sum(1 for p in proposals if p["type"] == "reorder")
         emit("planner", "done", f"{len(proposals)} actions proposed ({n_t} transfer, {n_r} reorder).",
@@ -284,7 +304,7 @@ async def _plan(store_id: str, category: str, horizon: int, question: Optional[s
         "shortfalls": [{k: x[k] for k in ("sku", "size", "name", "price_inr", "on_hand", "incoming", "incoming_eta",
                                            "reorder_point", "need_21d", "shortfall", "unmet_7d")} for x in short],
         "transfer_options": tr_focus,
-        "trend": (results.get("trends") or {}).get("text"),
+        "market_trends": (results.get("trends") or {}).get("insights"),
     }
     model_used = config.MODEL_AGENT
     draft = None
@@ -292,7 +312,7 @@ async def _plan(store_id: str, category: str, horizon: int, question: Optional[s
         draft, model_used = await asyncio.wait_for(
             generate_json(json.dumps(data, ensure_ascii=False, default=str), PlanDraft,
                           model=config.MODEL_AGENT, timeout=config.PLANNER_TIMEOUT_S,
-                          system_instruction=PLANNER_SYSTEM, temperature=0.2),
+                          system_instruction=PLANNER_SYSTEM, temperature=0.2, hedge_after=4.5),
             config.PLANNER_TOTAL_TIMEOUT_S)
     except Exception as e:
         log("WARNING", "planner model failed; using rule-based plan", error=type(e).__name__)
