@@ -9,6 +9,8 @@
 | **Pitch deck** | [`docs/submission/RetailNova-Prototype-Deck.pdf`](docs/submission/) |
 | **API (Cloud Run)** | https://retailnova-api-569310655517.asia-south1.run.app/api/health |
 
+![The RetailNova loop: the shopper asks, the demand signal lands, the plan is generated, the manager approves, and the shopper is notified (3× speed)](docs/media/loop.gif)
+
 RetailNova is a pair of Gemini agents for a multi-store retailer, built on Google Cloud:
 - a **shopping concierge** for customers
 - a **demand copilot** for store managers
