@@ -1,0 +1,16 @@
+{
+  "data": "SIMULATED (Nova Bazaar is fictional); not field results",
+  "primary_arm": "TimesFM (BigQuery AI.FORECAST) + festival calendar; demand_sensed = sales + captured unmet / capture rate",
+  "window": "cutoff 2025-09-08, 42-day horizon to 2025-10-19 (Diwali 2025 = 2025-10-20), chain-wide (7 stores x 6 categories)",
+  "capture_rate": 0.35,
+  "wape_sales_only": 34.3,
+  "wape_demand_sensed": 33.0,
+  "stockout_days_sales_only": 159,
+  "stockout_days_demand_sensed": 141,
+  "lost_revenue_sales_only_inr": 12587435,
+  "lost_revenue_demand_sensed_inr": 11193349,
+  "lost_revenue_reduction_pct": 11.1,
+  "sensitivity_note": "Across capture rates of 10-50%, demand sensing cuts lost revenue by 9.6-11.3% and WAPE by 1.1-1.4 points versus sales-only, with gains growing as more unmet demand is captured (simulation; capture rate assumed known).",
+  "run_at": "2026-10-18T05:05:36Z",
+  "report": "evals/backtest_report.md"
+}

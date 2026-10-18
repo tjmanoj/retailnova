@@ -120,12 +120,19 @@ SELECT * FROM AI.FORECAST(
 
 ### 3.1 Data pipeline notes (additive; produced by `data/` and `evals/backtest.py`)
 - **`signals_daily`** has rows only where `unmet_units > 0` (2024-10-01 → 2026-10-17). `sku` is NULL for asks that are not tied to stock (reasons `not_carried` / `price_too_high`).
-- **`forecast_input.units_demand_sensed`** adds only the stock-related signals, i.e. rows with a `sku`.
-- **`forecasts`:** `forecast_value` and `lower` are floored at 0.
+- **`forecast_input.units_demand_sensed`** (changed at the lead's request on 2026-10-18; this supersedes the table note above):
+  - It is the estimated true demand: `units_sales + round(unmet_units / 0.35)`, where 0.35 is the capture rate. In a real deployment, the capture rate would be calibrated with store audits.
+  - It uses stock-related signals only, i.e. rows with a `sku`.
+- **`forecasts`:**
+  - `model = 'TimesFM + festival calendar'`. The raw `AI.FORECAST` rows are kept in the additive table `forecasts_timesfm`, which has the same columns and `model = 'TimesFM'`.
+  - **Festival uplift.** It is learned per store × category × variant from Diwali 2024 and 2025 (offsets −21 … +2, weekday-adjusted). For 2026-10-18 … 2026-11-10, the forecast is `max(TimesFM, base × weekday × uplift)`. Bounds are scaled by the same ratio. See `data/run_forecast.py`.
+  - `forecast_value` and `lower` are floored at 0.
 - **`backtest_results`:**
   - `capture_rate = 0.0` for `sales_only`.
   - `scope` ∈ `overall`, `category:<category>`, `store:<store_id>`, `<store_id>|<category>`.
   - Besides the four metrics above, it also has `bias` and `fill_rate`.
+  - `variant` ∈ `sales_only`, `demand_sensed` (sales + captured), `demand_sensed_scaled` (sales + captured ÷ rate), plus the twin of each with a `_festival` suffix (the same forecast with the festival-calendar uplift).
+  - The headline numbers for decks are in `evals/backtest_summary.json`.
 - **Backtest working tables** (written by `evals/backtest.py`):
   - `backtest_input`: date DATE, variant STRING, capture_key STRING, store_id STRING, category STRING, y INT64
   - `backtest_forecasts`: variant STRING, capture_rate FLOAT64, store_id STRING, category STRING, forecast_date DATE, forecast_value FLOAT64, lower FLOAT64, upper FLOAT64, model STRING, run_at TIMESTAMP
@@ -143,6 +150,7 @@ SELECT * FROM AI.FORECAST(
   - Most `incoming_eta` values are 2026-10-19, the next Monday delivery.
   - The hero gaps have `incoming = 0`.
   - `CHN-ANN__SAR-001__FREE.on_hand = 2`, so RS Puram is the natural transfer source.
+  - Demo transfer sources (lead request): `CBE-RSP__SAR-001__FREE.reorder_point` 11 → 2 (on_hand 14) and `HYD-BNJ__SAR-005__FREE.reorder_point` 11 → 4 (on_hand 25, wine maroon soft silk). `meta/demo.snapshot_version = sim-32df41bdfb64`.
 
 ---
 
