@@ -125,25 +125,25 @@ Gemini runs through Agent Platform using the Cloud Run **service account**. Ther
 Method, per-case results and failures: [`evals/concierge_report.md`](evals/concierge_report.md).
 
 ### Backtest: does sensing unmet demand help? (synthetic; true demand known)
-Cutoff 2025-09-08, a 42-day horizon through the Diwali 2025 ramp, a 35% signal capture rate, and the same replenishment policy in every arm.
+Cutoff 2025-09-08, a 42-day horizon through the Diwali 2025 ramp, all 7 stores, and a 35% signal capture rate. Both arms use **the same pipeline the live app runs** (TimesFM plus the festival calendar) and the same replenishment policy.
 
 | | Sales-only forecast | Demand-sensed forecast |
 |---|---:|---:|
-| Lost revenue | ₹30.4 lakh | **₹21.0 lakh (−31%)** |
-| Stockout days | 41 | **34** |
-| Fill rate | 97.0% | **98.0%** |
-| Forecast error (WAPE) | 45.5% | 44.5% |
+| Lost revenue (6 weeks) | ₹125.9 lakh | **₹111.9 lakh (−11.1%)** |
+| Stockout days | 159 | **141** |
+| Forecast error (WAPE) | 34.3% | **33.0%** |
 
-- **Honest reading.** Captured signals barely change forecast *error*: only 2.5% of the simulated history was censored. The **decisions** improve a lot, because the recovered demand sits on exactly the items that stock out.
-- **Seasonality matters more for accuracy.** A calendar-aligned festival layer on top of TimesFM cuts WAPE by about 11 points (45.5% → 34.3%).
-- Full tables, every arm and the sensitivity from 10–50% capture: [`evals/backtest_report.md`](evals/backtest_report.md).
+- **Robust to the capture assumption.** From 10% to 50% capture, lost revenue falls **9.6–11.3%**. Under a replenishment policy that pre-builds festive stock, the same signals cut lost revenue by **31%** (₹30.4 lakh → ₹21.0 lakh).
+- **Honest reading.** Signals move forecast *error* only modestly, because just 2.5% of the simulated history was censored. The **decisions** improve more, because the recovered demand sits on exactly the items that stock out.
+- **Seasonality matters more for accuracy.** The calendar-aligned festival layer on TimesFM cuts WAPE by about 11 points (45.5% → 34.3%).
+- Every arm, policy and sensitivity result is in [`evals/backtest_report.md`](evals/backtest_report.md).
 
 ## Judging criteria → where to look
 
 | Criterion | Evidence |
 |---|---|
 | **Technical merit and GenAI (40%)** | Multi-agent ADK backend (`backend/app/agents/`); tool-grounded concierge with a **server-side grounding validator**; structured extraction; parallel ops plan with structured proposals; Firestore vector search; BigQuery TimesFM; hedged model fallback; streaming; keyless auth; eval suite and backtest (`evals/`) |
-| **Problem alignment and impact (25%)** | Covers discovery, personalization, conversational shopping, demand planning, inventory and customer insights, across physical and digital commerce; measured −31% lost revenue in the backtest |
+| **Problem alignment and impact (25%)** | Covers discovery, personalization, conversational shopping, demand planning, inventory and customer insights, across physical and digital commerce; backtest: −11% lost revenue and 18 fewer stockout days |
 | **Innovation (25%)** | Turns *conversations* into *planning inputs*: censored-demand capture, plus a closed loop from the shopper's ask to the manager's approval and back to the shopper |
 | **UX and solution design (10%)** | No-login Judge Mode; Live Loop split-screen; streamed agent activity; mobile-first chat; no axe accessibility issues; light and dark themes |
 
