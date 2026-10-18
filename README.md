@@ -129,19 +129,28 @@ Gemini runs through Agent Platform using the Cloud Run **service account**. Ther
 
 ## Results (measured, reported as is)
 
-### Concierge evaluation: 30 cases against the deployed API
+### Concierge evaluation: 33 cases against the deployed API (v1.1)
 | Metric | Result |
 |---|---|
-| Grounding: recommended products exist, at the catalog price | **100%** (68/68) |
-| Stock counts and badges match Firestore | **100%** (60/60) |
-| Budget, size and colour constraints respected | **98%** (48/49; the one miss is labelled "Alternative: different colour") |
-| Off-topic and prompt-injection attempts refused, with no leaks | **100%** (8/8) |
+| Grounding: recommended products exist, at the catalog price | **100%** (78/78) |
+| Stock counts and badges match Firestore | **100%** (65/65) |
+| Budget, size and colour constraints respected | **97.9%** (46/47; the one miss is labelled "Alternative: different colour") |
+| Off-topic and prompt-injection attempts refused, with no leaks (Model Armor plus agent guardrails) | **100%** (8/8) |
 | Honest out-of-stock answers that name where the item is available | **100%** (5/5) |
-| Demand-signal category and outcome correct; correct SKU | **100%** (22/22); **7/7** |
-| Cases passing overall | **96.7%** (29/30) |
-| Chat latency (10 sequential turns), p50 / p95 | **4.5 s / 5.9 s**; first streamed event about 0.1 s |
+| Demand-signal category and outcome correct; correct SKU | **100%** (25/25); **7/7** |
+| Voice note, out-of-catalogue ask (lehenga), and walk-in logged by staff | **3/3** |
+| Cases passing overall | **97.0%** (32/33) |
+| Chat latency (10 sequential turns, including Model Armor and memory), p50 / p95 | **5.5 s / 7.3 s**; first streamed event about 0.1 s |
 
-The first run scored 28/30 (signal SKU 4/7, out-of-stock honesty 4/5). We fixed the causes and re-ran the suite; both runs are documented. Method, per-case results and the remaining failure are in [`evals/concierge_report.md`](evals/concierge_report.md).
+Progress across runs:
+
+| Run | Cases passing | Notes |
+|---|---|---|
+| v1.0 | 28/30 | Before fixes |
+| v1.0 | 29/30 | After fixing signal SKU, out-of-stock wording and category search |
+| **v1.1** | **32/33** | Adds voice, store assist, Model Armor and memory |
+
+Method, per-case results and the remaining failure are in [`evals/concierge_report.md`](evals/concierge_report.md).
 
 ### Backtest: does sensing unmet demand help? (synthetic; true demand known)
 Cutoff 2025-09-08, a 42-day horizon through the Diwali 2025 ramp, all 7 stores, and a 35% signal capture rate. Both arms use **the same pipeline the live app runs** (TimesFM plus the festival calendar) and the same replenishment policy.
