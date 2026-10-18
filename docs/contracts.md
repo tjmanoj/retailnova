@@ -370,3 +370,48 @@ These clarify behaviour already implied above; nothing earlier in this file chan
 - **Live signal outcome.** The extractor proposes the SKU and outcome. The server then aligns the SKU with the first card shown and re-checks the outcome against live stock at the shopper's store: out of stock gives `unmet` with `out_of_stock`, or with `size_unavailable` when other sizes are in stock. `est_value_inr` is price × quantity.
 - **Concierge tools.** `search_products`, `check_availability`, `get_alternatives`, `reserve_item`, `notify_me` and `show_products`. Photos are passed to the model inline, and it then calls `search_products` (there is no separate `search_by_image` tool). The signal channel is `image_search`.
 - **SSE through Firebase Hosting.** If the Hosting rewrite buffers streamed responses, the UI can call the Cloud Run URL directly. The API enables CORS when `ALLOWED_ORIGINS` is set (comma-separated).
+
+## 9. v1.1 enhancements (2026-10-18, additive; the UI must degrade gracefully when a feature flag is off)
+
+### 9.1 Feature flags
+`GET /api/health` and `GET /api/bootstrap` gain:
+`features: {voice: bool, store_assist: bool, trends: bool, model_armor: bool, memory: "memory_bank"|"firestore"|null, guided_demo: bool}`.
+
+### 9.2 Voice notes (shopper)
+- **Request.** `POST /api/chat` accepts `audio_base64?: str` and `audio_mime?: "audio/webm"|"audio/ogg"|"audio/mp4"|"audio/mpeg"|"audio/wav"`. Limits: ≤ 2 MB and ≤ 60 s, otherwise 413. `message` may be empty when audio is present.
+- **Processing.** Gemini receives the audio inline. Any Indian language works.
+- **New SSE event `transcript`** `{text: str, language: str}`, emitted before the reply so the UI can show what it heard.
+- **Activity label:** "Listening to your voice note".
+- **Signal channel.** `DemandSignal.channel` gains the value `"voice"`.
+
+### 9.3 Store assist: walk-in requests logged by staff (physical retail)
+- **Request.** `POST /api/assist` (JSON) `{store_id, text?: str, audio_base64?: str, audio_mime?: str}`.
+- **Response.** `{signal: DemandSignal|null, transcript: str|null, message: str}`.
+- **Processing.** The extractor runs on the request. The result is written to `demand_signals` with `channel: "store_assist"` and `source: "live"`. Stock is checked at that store to set the outcome.
+- **Example:** "Customer wanted a red Banarasi saree, size free, about ₹8,000; we had none".
+
+### 9.4 Market trends via Google Search grounding (ops plan)
+- **The `trends` step** in `/api/plan` now runs. It uses Gemini with the `google_search` tool, a timeout of 10 s or less, and a cache keyed by (store city, category) for 60 min.
+- **Step result.** `PlanStep.data = {insights: str[] (≤ 3, ≤ 140 chars each), sources: [{title: str, url: str}] (≤ 4)}`.
+- **Failure.** On timeout or error the step's status is `skipped` with a friendly summary. The plan never fails because of this step.
+- **Evidence.** `Evidence` gains `url?: str`. Trend evidence (`kind: "trend"`) carries a source URL when one is available.
+
+### 9.5 Model Armor screening
+- **What is screened.** Shopper chat text, `/api/ask` questions and `/api/assist` text go through Model Armor `sanitizeUserPrompt` (a template in asia-south1: prompt-injection/jailbreak, malicious URIs, responsible-AI filters).
+- **If blocked.** The reply is a polite, localised refusal and no tools run. `done` carries `guardrail: {provider: "model_armor", verdict: "blocked", categories: str[]}`.
+- **If allowed.** Optionally `guardrail: {provider: "model_armor", verdict: "allowed"}`.
+- **Failure.** If Model Armor errors, fail open (log the error; the server-side grounding checks still apply).
+
+### 9.6 Shopper memory: "Nova remembers you"
+- **Storage.** Preferences (colours, fabrics, sizes, budget, occasions, store) are stored per `session_id`, which acts as the shopper id. The preferred backend is Agent Platform **Memory Bank** (ADK `VertexAiMemoryBankService`); the fallback is Firestore `profiles/{session_id}`, extracted by Flash-Lite.
+- **`GET /api/profile?session_id=`** returns `{session_id, summary: str, preferences: [{key: str, value: str}], source: "memory_bank"|"firestore"|null, updated_at: str|null}`.
+- **`POST /api/profile/forget`** `{session_id}` returns `{forgotten: true}` and deletes the memories.
+- **New SSE event `memory`** `{summary: str, preferences: [{key, value}]}`, emitted when the concierge used remembered preferences in this turn.
+- **Privacy.** No personal data: never store names, phones or addresses, only shopping preferences.
+
+### 9.7 Radar additions
+- `Radar.kpis.revenue_protected_inr: int` is the sum of `expected_revenue_protected_inr` over `executed` actions for the store since the last reset.
+- **`Radar.assortment_gaps`** `[{label: str, category: Category, asks_7d: int, est_value_7d_inr: int, examples: str[] (≤ 3)}]` (max 5). These come from `not_carried` signals and show what customers ask for that the store doesn't sell.
+
+### 9.8 Morning brief
+The UI calls `POST /api/ask` with the question "Give me my morning brief for {store}: what changed, top 3 risks before Diwali, and the 3 actions I should take today." No new endpoint is needed.
