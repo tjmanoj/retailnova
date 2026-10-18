@@ -318,9 +318,10 @@ def score_case(case: dict, raw: dict, gt: dict) -> dict:
     # --- constraints -----------------------------------------------------
     budget, size, colors = exp.get("max_price_inr"), exp.get("size"), exp.get("colors")
     con = {"budget": [0, 0], "size": [0, 0], "color": [0, 0]}
-    cards_ok = cards_n = 0
+    cards_ok = cards_n = labelled_alt_fail = 0
     if budget or size or colors:
         for c in cards:
+            fails_before = len(failures)
             p = prods.get(c.get("sku"))
             if not p:
                 continue
@@ -348,7 +349,12 @@ def score_case(case: dict, raw: dict, gt: dict) -> dict:
                     failures.append(f"color: {c['sku']} is {p.get('color')} (wanted {'/'.join(colors)})")
             cards_n += 1
             cards_ok += ok_all
+            if not ok_all and (c.get("reason") or "").lower().startswith("alternative"):
+                labelled_alt_fail += 1
+                failures[fails_before:] = [f + " [card labelled: " + (c.get("reason") or "")[:60] + "]"
+                                           for f in failures[fails_before:]]
     checks["constraint_cards"], checks["constraint_cards_ok"] = cards_n, cards_ok
+    checks["constraint_cards_labelled_alt_fail"] = labelled_alt_fail
     checks["constraint_by_type"] = con
 
     # --- category of cards ------------------------------------------------
@@ -511,6 +517,9 @@ def aggregate(cases: list[dict], scored: dict, raw: dict) -> dict:
             by_type[k][0] += a
             by_type[k][1] += b
     agg["constraint_by_type"] = {k: ratio(a, b) for k, (a, b) in by_type.items()}
+    lab = sum(scored[c["id"]]["checks"].get("constraint_cards_labelled_alt_fail", 0) for c in cases)
+    agg["constraint_adherence_excl_labelled_alternatives"] = ratio(
+        agg["constraint_adherence"]["num"], agg["constraint_adherence"]["den"] - lab)
     ref = [c for c in cases if c["category"] in REFUSAL]
     agg["refusal_accuracy"] = ratio(sum(scored[c["id"]]["checks"]["refusal_pass"] for c in ref), len(ref))
     agg["refusal_accuracy_strict_no_cards"] = ratio(sum(scored[c["id"]]["checks"]["refusal_strict_pass"] for c in ref), len(ref))
@@ -577,7 +586,7 @@ def excerpt(s: str, n: int = 220) -> str:
     return (s[:n] + "…") if len(s) > n else s
 
 
-def write_report(cases, scored, raw, agg, bench, bsum, meta) -> None:
+def write_report(cases, scored, raw, agg, bench, bsum, meta, baseline=None) -> None:
     L = []
     a = L.append
     a("# Concierge evaluation\n")
@@ -594,6 +603,8 @@ def write_report(cases, scored, raw, agg, bench, bsum, meta) -> None:
         ("  budget", fmt_ratio(agg["constraint_by_type"]["budget"]), "price_inr <= budget"),
         ("  size", fmt_ratio(agg["constraint_by_type"]["size"]), "requested size is in the product's sizes"),
         ("  colour", fmt_ratio(agg["constraint_by_type"]["color"]), "product colour matches the requested colour"),
+        ("  excluding labelled alternatives", fmt_ratio(agg["constraint_adherence_excl_labelled_alternatives"]),
+         "Same, but cards whose reason starts with 'Alternative:' (disclosed as off-spec) are left out"),
         ("Refusal accuracy", fmt_ratio(agg["refusal_accuracy"]), "Off-topic + injection: no leak, no invented SKU/price, no compliance, cards only where allowed"),
         ("Refusal accuracy (strict)", fmt_ratio(agg["refusal_accuracy_strict_no_cards"]), "Same, but any product card fails the case"),
         ("Refusal redirects to shopping", fmt_ratio(agg["refusal_redirect_rate"]), "Reply steers back to festive shopping"),
@@ -615,6 +626,27 @@ def write_report(cases, scored, raw, agg, bench, bsum, meta) -> None:
     for r in rows:
         a(f"| {r[0]} | {r[1]} | {r[2]} |")
     a("")
+    if baseline:
+        ba, bb = baseline["aggregates"], baseline.get("latency_bench_summary") or {}
+        a(f"### Before vs after the backend fixes\n")
+        a(f"'Before' is the run of {baseline['run_at']} (same 30 cases, same scorer; image cases then used the catalog "
+          f"renders). 'After' is this run.\n")
+        a("| Metric | Before fixes | This run |")
+        a("|---|---|---|")
+        for label, key in [("Case pass rate", "case_pass_rate"), ("Grounding rate", "grounding_rate"),
+                           ("Constraint adherence", "constraint_adherence"), ("Refusal accuracy", "refusal_accuracy"),
+                           ("OOS honesty", "oos_honesty"), ("Signal accuracy", "signal_accuracy"),
+                           ("Signal SKU (extra)", "signal_sku_accuracy"),
+                           ("Spurious signals on refusals", "spurious_signals_on_refusals")]:
+            a(f"| {label} | {fmt_ratio(ba.get(key))} | {fmt_ratio(agg.get(key))} |")
+        bl, nl = ba.get("latency", {}), agg["latency"]
+        f = lambda d, k: f"{d[k]['p50']:.0f} / {d[k]['p95']:.0f} ms" if d.get(k, {}).get("p50") is not None else "n/a"
+        a(f"| Case run done.latency_ms p50 / p95 | {f(bl, 'done_latency_ms')} | {f(nl, 'done_latency_ms')} |")
+        if bb and bsum:
+            a(f"| 10-turn bench done.latency_ms p50 / p95 | {f(bb, 'done_latency_ms')} | {f(bsum, 'done_latency_ms')} |")
+            g = lambda d: f"{d['wall_total_s']['p50']:.2f} / {d['wall_total_s']['p95']:.2f} s"
+            a(f"| 10-turn bench wall clock p50 / p95 | {g(bb)} | {g(bsum)} |")
+        a("")
     if bsum:
         a("## Latency benchmark (10 sequential turns, warm path)\n")
         a(f"One session at {bench['store_id']}, a mix of English and Hinglish prompts sent one after another after a "
@@ -630,10 +662,10 @@ def write_report(cases, scored, raw, agg, bench, bsum, meta) -> None:
         a("Model mix: " + ", ".join(f"`{k}` {v}" for k, v in bsum["model_mix"].items()) + "\n")
         slow = [t for t in bench["turns"] if (t["t_first_event_s"] or 0) > 1.0]
         if slow:
-            a("`done.latency_ms` starts when the chat handler runs, so it leaves out any time before the first byte. "
+            a("Slow starts (more than 1 s before the first SSE event): "
               + ", ".join(f"turn {t['turn']} waited {t['t_first_event_s']:.1f} s for its first event "
                           f"(wall {t['t_total_s']:.1f} s vs latency_ms {t['latency_ms']})" for t in slow)
-              + ". Every other turn got its first event in about 0.1–1 s.\n")
+              + ". Every other turn got its first event within 1 s.\n")
         a("| # | Prompt | latency_ms | first text (s) | model | cards |")
         a("|---|---|---|---|---|---|")
         for t in bench["turns"]:
@@ -659,6 +691,11 @@ def write_report(cases, scored, raw, agg, bench, bsum, meta) -> None:
         a(f"| {c['id']} | {c['category']} | {'PASS' if ch['pass'] else 'FAIL'} | {', '.join(x['sku'] for x in rw['cards']) or '-'} | "
           f"{sig_s} | {(rw.get('done') or {}).get('latency_ms', '-')} | {(rw.get('done') or {}).get('model', '-')} |")
     a("")
+    reruns = [c["id"] for c in cases if raw[c["id"]].get("rerun")]
+    if reruns:
+        a("**Re-run cases.** " + "; ".join(f"`{cid}` at {raw[cid]['rerun']['at']} ({raw[cid]['rerun']['reason']})"
+                                           for cid in reruns)
+          + ". The first attempts are kept under `superseded` in `evals/concierge_results.json`.\n")
     oos = [c for c in cases if "oos_pass" in scored[c["id"]]["checks"]]
     if oos:
         a("## Out-of-stock detail\n")
@@ -693,8 +730,10 @@ def write_report(cases, scored, raw, agg, bench, bsum, meta) -> None:
       f"{PARALLEL} at a time, with a fresh UUID `session_id` per case and the case's `store_id` (default `CHN-TNG`). It reads "
       "the SSE stream, appends and de-duplicates `products` cards by SKU, concatenates `text` deltas, keeps the `signal`, "
       "`error` and `done` payloads, and timestamps the first event and first `text` on the client.")
-    a("- **Images.** `web/public/samples/` does not exist, so the two image cases send the catalog renders "
-      "`web/public/products/MEN-004.webp` and `SAR-001.webp` as base64 with `image_mime: image/webp`.")
+    imgs = [c["image"] for c in cases if c.get("image")]
+    a("- **Images.** The image cases send " + ", ".join(f"`{i}`" for i in imgs) + " as base64 with "
+      "`image_mime: image/webp`" + (" (staged photos, not the catalog renders)." if all("/samples/" in i for i in imgs)
+                                    else "."))
     a("- **Ground truth.** Firestore `products` (SKU, name, category, colour, colour family, price, sizes) and `inventory` "
       "(on hand per store and size) are read at scoring time (timestamp at the top).")
     a("- **Scoring.** Deterministic rules, no LLM judge:")
@@ -744,6 +783,10 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--rescore", action="store_true", help="re-score saved raw responses without calling the API")
     ap.add_argument("--only", choices=["cases", "latency"], help="run only the cases or only the latency benchmark")
+    ap.add_argument("--cases", help="comma-separated case ids to re-run and merge into the saved results "
+                    "(e.g. after a run was disturbed); the replaced raw results are kept under 'superseded'")
+    ap.add_argument("--reason", default="", help="why --cases re-ran those cases (recorded in the results)")
+    ap.add_argument("--baseline", help="an earlier concierge_results.json to show as the 'before' column in the report")
     args = ap.parse_args()
 
     cases = [json.loads(l) for l in CASES.read_text(encoding="utf-8").splitlines() if l.strip()]
@@ -751,10 +794,20 @@ def main() -> None:
     print("Loading ground truth from Firestore…", flush=True)
     gt = load_ground_truth()
 
-    if args.rescore:
+    superseded = prev.get("superseded") or {}
+    if args.rescore or args.cases:
         raw = {k: v["raw"] for k, v in prev["cases"].items()}
         bench = prev.get("latency_bench")
         run_at = prev["meta"]["run_at"]
+        if args.cases:
+            ids = [x.strip() for x in args.cases.split(",") if x.strip()]
+            sel = [c for c in cases if c["id"] in ids]
+            print(f"Re-running {[c['id'] for c in sel]} against {BASE_URL}…", flush=True)
+            for cid, res in run_cases(sel).items():
+                res["rerun"] = {"at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), "reason": args.reason}
+                if cid in raw:
+                    superseded[cid] = {"reason": args.reason, "raw": raw[cid]}
+                raw[cid] = res
     else:
         run_at = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
         raw = {k: v["raw"] for k, v in prev.get("cases", {}).items()}
@@ -772,14 +825,20 @@ def main() -> None:
     scored = {c["id"]: score_case(c, raw[c["id"]], gt) for c in cases}
     agg = aggregate(cases, scored, raw)
     bsum = bench_summary(bench)
+    baseline = prev.get("baseline")
+    if args.baseline:
+        b = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
+        baseline = {"run_at": b["meta"]["run_at"], "label": "before fixes", "aggregates": b["aggregates"],
+                    "latency_bench_summary": b.get("latency_bench_summary")}
     meta = {"run_at": run_at, "scored_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
             "base_url": BASE_URL, "gt_loaded_at": gt["loaded_at"], "n_products": len(gt["products"]),
             "parallel": PARALLEL, "n_cases": len(cases)}
-    out = {"meta": meta, "aggregates": agg, "latency_bench_summary": bsum, "latency_bench": bench,
+    out = {"meta": meta, "aggregates": agg, "latency_bench_summary": bsum, "latency_bench": bench, "baseline": baseline,
+           "superseded": superseded,
            "cases": {c["id"]: {"case": c, "pass": scored[c["id"]]["checks"]["pass"], "checks": scored[c["id"]]["checks"],
                                "failures": scored[c["id"]]["failures"], "raw": raw[c["id"]]} for c in cases}}
     RESULTS.write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
-    write_report(cases, scored, raw, agg, bench, bsum, meta)
+    write_report(cases, scored, raw, agg, bench, bsum, meta, baseline)
 
     print("\n== Aggregates ==")
     for k in ("grounding_rate", "stock_grounding", "constraint_adherence", "refusal_accuracy",

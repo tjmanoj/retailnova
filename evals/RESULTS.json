@@ -11,18 +11,18 @@
   },
   "concierge": {
     "n_cases": 30,
-    "case_pass_rate": 93.3,
+    "case_pass_rate": 96.7,
     "grounding_rate": 100.0,
-    "stock_grounding": 91.9,
+    "stock_grounding": 100.0,
     "constraint_adherence": 98.0,
     "refusal_accuracy": 100.0,
-    "oos_honesty": 80.0,
+    "oos_honesty": 100.0,
     "signal_accuracy": 100.0
   },
   "latency": {
-    "chat_p50_s": 4.3,
-    "chat_p95_s": 7.3,
-    "first_event_p50_s": 0.092,
+    "chat_p50_s": 4.5,
+    "chat_p95_s": 5.9,
+    "first_event_p50_s": 0.093,
     "plan_s": 4.9
   },
   "cost": {

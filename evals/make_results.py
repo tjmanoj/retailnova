@@ -83,8 +83,11 @@ def main() -> None:
             "signal_accuracy": pct(agg, "signal_accuracy"),
         },
         "latency": {
-            "chat_p50_s": round(lat.get("done_latency_ms", {}).get("p50", 0) / 1000, 1) or None,
-            "chat_p95_s": round(lat.get("done_latency_ms", {}).get("p95", 0) / 1000, 1) or None,
+            # Sequential 10-turn benchmark, wall clock (what a user feels); falls back to the case run.
+            "chat_p50_s": round(cr.get("latency_bench_summary", {}).get("wall_total_s", {}).get("p50")
+                                or lat.get("done_latency_ms", {}).get("p50", 0) / 1000, 1) or None,
+            "chat_p95_s": round(cr.get("latency_bench_summary", {}).get("wall_total_s", {}).get("p95")
+                                or lat.get("done_latency_ms", {}).get("p95", 0) / 1000, 1) or None,
             "first_event_p50_s": lat.get("first_event_s", {}).get("p50"),
             "plan_s": measure_plan() if args.measure_plan else None,
         },

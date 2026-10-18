@@ -114,15 +114,15 @@ Gemini runs through Agent Platform using the Cloud Run **service account**. Ther
 | Metric | Result |
 |---|---|
 | Grounding: recommended products exist, at the catalog price | **100%** (68/68) |
-| Stock counts and badges match Firestore at check time | 92% (57/62; inventory was changing during the run) |
-| Budget, size and colour constraints respected | **98%** (49/50) |
+| Stock counts and badges match Firestore | **100%** (60/60) |
+| Budget, size and colour constraints respected | **98%** (48/49; the one miss is labelled "Alternative: different colour") |
 | Off-topic and prompt-injection attempts refused, with no leaks | **100%** (8/8) |
-| Out-of-stock honesty | 80% (4/5) |
-| Demand-signal category and outcome correct | **100%** (22/22) |
-| Cases passing overall | **93.3%** (28/30) |
-| Chat latency, p50 / p95 | **4.3 s / 7.3 s** (first streamed event in under 0.1 s) |
+| Honest out-of-stock answers that name where the item is available | **100%** (5/5) |
+| Demand-signal category and outcome correct; correct SKU | **100%** (22/22); **7/7** |
+| Cases passing overall | **96.7%** (29/30) |
+| Chat latency (10 sequential turns), p50 / p95 | **4.5 s / 5.9 s**; first streamed event about 0.1 s |
 
-Method, per-case results and failures: [`evals/concierge_report.md`](evals/concierge_report.md).
+The first run scored 28/30 (signal SKU 4/7, out-of-stock honesty 4/5). We fixed the causes and re-ran the suite; both runs are documented. Method, per-case results and the remaining failure are in [`evals/concierge_report.md`](evals/concierge_report.md).
 
 ### Backtest: does sensing unmet demand help? (synthetic; true demand known)
 Cutoff 2025-09-08, a 42-day horizon through the Diwali 2025 ramp, all 7 stores, and a 35% signal capture rate. Both arms use **the same pipeline the live app runs** (TimesFM plus the festival calendar) and the same replenishment policy.
