@@ -13,3 +13,4 @@
 | D9 | 2026-10-18 | No login; sessions are browser UUIDs | Judges get to value in under 2 minutes |
 | D10 | 2026-10-18 | Firebase Hosting serves the UI and rewrites `/api/**` to Cloud Run | One origin, so no CORS; both required services are used |
 | D11 | 2026-10-18 | Demo clock fixed at 2026-10-18; Diwali 2026-11-08 | A stable, reproducible story (confirmed with Search grounding) |
+| D12 | 2026-10-18 | The primary agent model is **`gemini-3.6-flash`** (GA), with `gemini-3.5-flash-lite` as a hedged fallback | Measured on 18 Oct with a tool-calling prompt: 3.6 Flash median 1.3 s vs 3.8 Flash 7.5 s (up to 20 s and timeouts). Judges need fast, reliable turns |

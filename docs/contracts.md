@@ -118,6 +118,32 @@ SELECT * FROM AI.FORECAST(
   data_col => 'y', timestamp_col => 'date', id_cols => ['store_id','category'], horizon => 42, confidence_level => 0.9)
 ```
 
+### 3.1 Data pipeline notes (additive; produced by `data/` and `evals/backtest.py`)
+- **`signals_daily`** has rows only where `unmet_units > 0` (2024-10-01 → 2026-10-17). `sku` is NULL for asks that are not tied to stock (reasons `not_carried` / `price_too_high`).
+- **`forecast_input.units_demand_sensed`** adds only the stock-related signals, i.e. rows with a `sku`.
+- **`forecasts`:** `forecast_value` and `lower` are floored at 0.
+- **`backtest_results`:**
+  - `capture_rate = 0.0` for `sales_only`.
+  - `scope` ∈ `overall`, `category:<category>`, `store:<store_id>`, `<store_id>|<category>`.
+  - Besides the four metrics above, it also has `bias` and `fill_rate`.
+- **Backtest working tables** (written by `evals/backtest.py`):
+  - `backtest_input`: date DATE, variant STRING, capture_key STRING, store_id STRING, category STRING, y INT64
+  - `backtest_forecasts`: variant STRING, capture_rate FLOAT64, store_id STRING, category STRING, forecast_date DATE, forecast_value FLOAT64, lower FLOAT64, upper FLOAT64, model STRING, run_at TIMESTAMP
+- **Simulated `demand_signals` in Firestore:**
+  - **Volume and dates.** 735 docs, dated 2026-09-18 → 2026-10-17 (none on demo day).
+  - **Fields.**
+    - `ts` is an ISO-8601 UTC **string** `YYYY-MM-DDTHH:MM:SSZ`, matching `DemandSignal.ts: str`, so ordering by `ts` sorts chronologically. Live writes should use the same string form.
+    - `session_id` is null.
+    - `signal_id` is `sim_YYYYMMDD_nnnnn`.
+    - `attributes` may include `substitute_sku` on `substituted` outcomes.
+  - **Consistency with BigQuery.** Over those 30 days, the `unmet` docs aggregate exactly to `signals_daily`: doc count = `signals`, and Σ`quantity` = `unmet_units`.
+  - **Indexes.** No composite index exists, so a query that combines `store_id ==` with a `date`/`ts` range fails. Filter on one field and do the rest on the client, or add an index.
+- **`inventory` / `inventory_snapshot`:**
+  - `updated_at` is 2026-10-18T03:30:00Z.
+  - Most `incoming_eta` values are 2026-10-19, the next Monday delivery.
+  - The hero gaps have `incoming = 0`.
+  - `CHN-ANN__SAR-001__FREE.on_hand = 2`, so RS Puram is the natural transfer source.
+
 ---
 
 ## 4. Shared schemas
@@ -279,10 +305,10 @@ Radar = {
 
 | Agent | Model | Tools / output |
 |---|---|---|
-| `concierge` (ADK `LlmAgent`) | `gemini-3.8-flash`, low thinking | `search_products`, `search_by_image`, `check_availability`, `get_alternatives`, `reserve_item`, `notify_me` |
+| `concierge` (ADK `LlmAgent`) | `gemini-3.6-flash`, low thinking | `search_products`, `search_by_image`, `check_availability`, `get_alternatives`, `reserve_item`, `notify_me` |
 | `signal_extractor` | `gemini-3.5-flash-lite`, JSON schema = `DemandSignal` minus server fields | runs after every chat turn as a background task |
-| `ops_planner` | `gemini-3.8-flash`, structured `ActionProposal[]` | inputs from the fan-out: `get_baseline_forecast`, `get_unmet_demand`, `get_inventory_position`, `get_transfer_options`, and (P1) `trend_check` with Google Search grounding |
-| `manager_qa` (ADK `LlmAgent`) | `gemini-3.8-flash` | the same read-only ops tools |
+| `ops_planner` | `gemini-3.6-flash`, structured `ActionProposal[]` | inputs from the fan-out: `get_baseline_forecast`, `get_unmet_demand`, `get_inventory_position`, `get_transfer_options`, and (P1) `trend_check` with Google Search grounding |
+| `manager_qa` (ADK `LlmAgent`) | `gemini-3.6-flash` | the same read-only ops tools |
 | Fallback on 429/503 | `gemini-3.5-flash-lite` | — |
 | Embeddings | `gemini-embedding-2`, 768-dim | `RETRIEVAL_DOCUMENT` for products, `RETRIEVAL_QUERY` for queries |
 | Catalog images (offline, once) | `gemini-3.1-flash-image` | WebP ≤ 80 KB at `web/public/products/{sku}.webp` |
@@ -308,3 +334,31 @@ All Gemini calls go through Agent Platform (`GOOGLE_GENAI_USE_VERTEXAI=TRUE`, lo
 - `actions` where `plan_id == <plan>`. Sort on the client.
 
 **Firebase web config** (public by design): project `retailnova-ai`, appId `1:569310655517:web:759a40bebfe91ceaa8c2f4`. Read the full config with `firebase apps:sdkconfig WEB <appId>`.
+
+---
+
+## 8. Backend behaviour notes (additive, 2026-10-18)
+
+These clarify behaviour already implied above; nothing earlier in this file changes.
+
+- **`products` events.** Usually one per chat turn, but there can be more than one; the UI should append. Cards come only from `show_products` (or a server fallback that uses only SKUs from this turn's tool results). When the shopper's best match is out of stock at their store, it is shown first with `badge: "other_store"`.
+- **`done.model`.** Either `gemini-3.6-flash`, `gemini-3.5-flash-lite`, or `gemini-3.6-flash+gemini-3.5-flash-lite` when a turn was hedged to the fallback. A plan made by the rule-based fallback reports `rules`.
+- **`POST /api/plan`** also accepts an optional `session_id`, used only for rate limiting (otherwise the client IP is used). `/api/ask` shares the chat rate limit.
+- **Plan steps.** All of `forecast`, `unmet_demand`, `inventory` and `transfers` are sent as `running`, then `done` or `error`, and `planner` comes last. `trends` is sent once as `skipped` while `ENABLE_TRENDS=false`. A missing BigQuery table makes its step `error`, and the plan still completes.
+- **Transfers and reorders.**
+  - **Transfer surplus** at a source store is `on_hand - reorder_point`, and it must be at least 2. Sources in the same state are preferred, because intra-state branch transfers need no GST invoice.
+  - A transfer's `eta_date` is today + 2 days. Approving it moves `on_hand` immediately (express transfer).
+  - A reorder's `eta_date` is today + `supplier_lead_days`. Lead days by category: sarees 10, kurta_sets 7, mens_ethnic 7, home_decor 5, gifting 4, footwear 8.
+- **Approve response.**
+  - For a **transfer**, `inventory_changes` has two rows: the source with a negative `delta`, and the destination with a positive one.
+  - For a **reorder**, `inventory_changes` has one row with `delta: 0` (on hand is unchanged), plus extra fields `incoming_delta`, `incoming_after` and `incoming_eta`.
+- **Notifications on approve.**
+  - A **transfer** notifies waiting `waitlist` entries for that SKU, up to the quantity moved. Entries at the destination store go first; if there are none, entries at any store. Each gets `kind: "reserved"` and a `reservations` doc held for 48 h, and its `waitlist.status` becomes `notified`.
+  - A **reorder** sends `kind: "transfer_eta"`. Its waitlist entries stay `waiting`, with an extra field `eta_notified: true`.
+- **Radar.**
+  - **Scope.** `kpis` and `top_gaps` cover the whole store when `category` is omitted. `series` is for `category`, or sarees when it is omitted.
+  - **Series values.** `lower` and `upper` are the bounds of the `demand_sensed` forecast. `unmet_units` is filled for past days and today (0 when there were none) and is null for future days.
+  - **Trend.** `trend` compares the last 3 complete days with the 4 days before them.
+- **Live signal outcome.** The extractor proposes the SKU and outcome. The server then aligns the SKU with the first card shown and re-checks the outcome against live stock at the shopper's store: out of stock gives `unmet` with `out_of_stock`, or with `size_unavailable` when other sizes are in stock. `est_value_inr` is price × quantity.
+- **Concierge tools.** `search_products`, `check_availability`, `get_alternatives`, `reserve_item`, `notify_me` and `show_products`. Photos are passed to the model inline, and it then calls `search_products` (there is no separate `search_by_image` tool). The signal channel is `image_search`.
+- **SSE through Firebase Hosting.** If the Hosting rewrite buffers streamed responses, the UI can call the Cloud Run URL directly. The API enables CORS when `ALLOWED_ORIGINS` is set (comma-separated).

@@ -12,10 +12,10 @@
           ┌──────────────▼───────────────────────────┐
           │ Cloud Run: retailnova-api (Python 3.12)  │  runs as service account retailnova-run (no API keys)
           │  FastAPI + Agent Development Kit (ADK)    │
-          │   ├─ concierge      Gemini 3.8 Flash      │──▶ Gemini on Agent Platform (global endpoint)
+          │   ├─ concierge      Gemini 3.6 Flash      │──▶ Gemini on Agent Platform (global endpoint)
           │   ├─ signal_extractor Gemini Flash-Lite   │
           │   ├─ ops_planner    fan-out ▶ Gemini plan │──▶ (P1) Google Search grounding
-          │   └─ manager_qa     Gemini 3.8 Flash      │
+          │   └─ manager_qa     Gemini 3.6 Flash      │
           └───────┬───────────────────────┬───────────┘
                   ▼                       ▼
      Firestore (asia-south1)        BigQuery (asia-south1, dataset retailnova)
@@ -27,7 +27,7 @@
 ## Google services and their roles
 | Service | Role in RetailNova |
 |---|---|
-| **Gemini 3.8 Flash** (Agent Platform) | Concierge reasoning and tool use, image understanding, multilingual chat, ops planning, manager Q&A |
+| **Gemini 3.6 Flash** (Agent Platform) | Concierge reasoning and tool use, image understanding, multilingual chat, ops planning, manager Q&A |
 | **Gemini 3.5 Flash-Lite** | Fast, cheap structured extraction of demand signals; fallback model |
 | **Gemini Embedding 2** | 768-dim product vectors for semantic search and image-to-catalog matching |
 | **Gemini 3.1 Flash Image** | One-off generation of a consistent catalog photo set |

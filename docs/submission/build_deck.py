@@ -318,7 +318,7 @@ def build(template: Path, links: dict):
     sl = s[4]
     set_title(sl, "Process flow diagram")
     steps = [("1 · Shopper asks", "Text, Hinglish/Tamil or a photo"),
-             ("2 · Concierge", "Gemini 3.8 Flash + tools: vector search, stock, reserve, notify"),
+             ("2 · Concierge", "Gemini 3.6 Flash + tools: vector search, stock, reserve, notify"),
              ("3 · Signal", "Flash-Lite extracts a DemandSignal → Firestore (live)"),
              ("4 · Plan", "TimesFM forecasts + signals + inventory → ActionProposals"),
              ("5 · Approve", "Manager approves → inventory moves → shopper notified")]
@@ -360,7 +360,7 @@ def build(template: Path, links: dict):
     sl = s[7]
     set_title(sl, "Technologies used in the solution")
     rows = [["Google service", "Used for"],
-            ["Gemini 3.8 Flash (Agent Platform)", "Concierge reasoning + tool calling, vision, multilingual chat, ops planning, manager Q&A"],
+            ["Gemini 3.6 Flash (Agent Platform)", "Concierge reasoning + tool calling, vision, multilingual chat, ops planning, manager Q&A"],
             ["Gemini 3.5 Flash-Lite", "Structured DemandSignal extraction (JSON schema); fallback model"],
             ["Gemini Embedding 2", "768-dim product vectors for semantic + image-to-catalog search"],
             ["Gemini 3.1 Flash Image", "Generated the consistent catalog photo set"],
@@ -383,7 +383,7 @@ def build(template: Path, links: dict):
     table(sl, X0, Y0, W, rows, [3.2, 2.6, 3.56], size=10, row_h=0.42)
     text(sl, X0, Y0 + 2.3, W, 1.7, [
         (f"Measured cost per 1,000 shopper conversations: {fmt(cost.get('per_1k_chats_inr'), 'inr')} "
-         f"(from real token usage on Gemini 3.8 Flash + Flash-Lite).", {"size": 10.5, "bold": True}),
+         f"(from real token usage on Gemini 3.6 Flash + Flash-Lite).", {"size": 10.5, "bold": True}),
         ("Serverless by design: Cloud Run scales to zero, Firestore and BigQuery bill per use, and no GPUs are needed "
          "(TimesFM runs inside BigQuery).", {"size": 10}),
         ("Payback logic: recovering even 1% of festive lost sales for a 50-store chain outweighs the platform cost "
@@ -495,8 +495,8 @@ def draw_architecture(sl):
     node(X0, Y0 + 1.4, 1.65, 1.2, "Users", "Shoppers · managers · judges (browser, phone)", MUTED)
     node(X0 + 2.0, Y0 + 1.4, 1.9, 1.2, "Firebase Hosting", "React UI on CDN; /api → Cloud Run; Firestore live listeners", MARIGOLD)
     node(X0 + 4.25, Y0 + 0.75, 2.45, 2.5, "Cloud Run · ADK agents", [
-        "Concierge: Gemini 3.8 Flash", "Signal extractor: Flash-Lite", "Ops planner: fan-out → Gemini", "Manager Q&A"], MAROON)
-    node(X0 + 7.05, Y0 + 0.0, 2.3, 1.15, "Gemini on Agent Platform", "3.8 Flash · Flash-Lite · Embedding 2", GREEN)
+        "Concierge: Gemini 3.6 Flash", "Signal extractor: Flash-Lite", "Ops planner: fan-out → Gemini", "Manager Q&A"], MAROON)
+    node(X0 + 7.05, Y0 + 0.0, 2.3, 1.15, "Gemini on Agent Platform", "3.6 Flash · Flash-Lite · Embedding 2", GREEN)
     node(X0 + 7.05, Y0 + 1.42, 2.3, 1.15, "Firestore", "Catalog + vectors, inventory, signals, plans, notifications", MARIGOLD)
     node(X0 + 7.05, Y0 + 2.84, 2.3, 1.2, "BigQuery", "Sales history · AI.FORECAST (TimesFM) · backtest", GREEN)
     arrow(sl, X0 + 1.67, Y0 + 2.0, X0 + 1.98, Y0 + 2.0)
