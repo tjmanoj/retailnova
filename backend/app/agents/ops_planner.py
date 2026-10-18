@@ -122,7 +122,7 @@ async def _produce(ch: EventChannel, store_id: str, category: Optional[str], hor
         if config.ENABLE_TRENDS:
             emit("trends", "running")
         else:
-            emit("trends", "skipped", "Trend check is turned off in this demo (ENABLE_TRENDS=false).")
+            emit("trends", "skipped", "Market-trend check with Google Search is off in this demo.")
 
         results: dict[str, Optional[dict]] = {}
 

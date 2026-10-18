@@ -22,3 +22,5 @@ data/out/
 MY-TASKS.md
 TEST-PLAN.md
 .DS_Store
+!web/.env.production
+docs/submission/*.pptx

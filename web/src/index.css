@@ -1,0 +1,327 @@
+@import "tailwindcss";
+
+/* Anek by Ek Type, self-hosted (OFL). Tamil and Devanagari load only when those scripts appear. */
+@font-face {
+  font-family: 'Anek Devanagari';
+  font-style: normal;
+  font-weight: 400 700;
+  font-stretch: 75% 125%;
+  font-display: swap;
+  src: url('./assets/fonts/anek-devanagari-devanagari.woff2') format('woff2');
+  unicode-range: U+0900-097F, U+1CD0-1CF4, U+1CF7-1CF9, U+200C-200D, U+20A8, U+20F0, U+25CC, U+A830-A839, U+A8E0-A8FF, U+11B00-11B0A;
+}
+@font-face {
+  font-family: 'Anek Latin';
+  font-style: normal;
+  font-weight: 300 800;
+  font-stretch: 75% 125%;
+  font-display: swap;
+  src: url('./assets/fonts/anek-latin-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Anek Latin';
+  font-style: normal;
+  font-weight: 300 800;
+  font-stretch: 75% 125%;
+  font-display: swap;
+  src: url('./assets/fonts/anek-latin-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Anek Tamil';
+  font-style: normal;
+  font-weight: 400 700;
+  font-stretch: 75% 125%;
+  font-display: swap;
+  src: url('./assets/fonts/anek-tamil-tamil.woff2') format('woff2');
+  unicode-range: U+0964-0965, U+0B82-0BFA, U+200C-200D, U+25CC;
+}
+
+/* ---------- Design tokens ---------- */
+:root {
+  color-scheme: light;
+  --bg: #f8f7f5;
+  --surface: #ffffff;
+  --surface-2: #f1efec;
+  --surface-3: #e9e6e2;
+  --line: #e2ded9;
+  --line-strong: #cdc7c1;
+  --ink: #1f1a1a;
+  --ink-2: #554d4c;
+  --ink-3: #6f6664;
+  --maroon: #7b1e2e;
+  --maroon-hover: #681826;
+  --maroon-ink: #7b1e2e;
+  --maroon-soft: #f7e9eb;
+  --on-maroon: #ffffff;
+  --marigold: #f2a20c;
+  --marigold-ink: #8a5300;
+  --marigold-soft: #fdf1d9;
+  --peacock: #0e6e73;
+  --peacock-soft: #e3f1f1;
+  --leaf: #1d7348;
+  --leaf-soft: #e4f2ea;
+  --danger: #b42318;
+  --danger-soft: #fdecea;
+  --chart-sales: #8a817f;
+  --chart-actual: #1f1a1a;
+  --chart-unmet: #7b1e2e;
+  --chart-sensed: #7b1e2e;
+  --focus: #b56d00;
+  --shadow-float: 0 12px 32px -12px rgb(31 26 26 / 0.28), 0 2px 6px rgb(31 26 26 / 0.06);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #151213;
+    --surface: #1d191a;
+    --surface-2: #262122;
+    --surface-3: #302a2b;
+    --line: #362f30;
+    --line-strong: #4a4142;
+    --ink: #f4eeea;
+    --ink-2: #c9bfbb;
+    --ink-3: #a99f9b;
+    --maroon: #a3283c;
+    --maroon-hover: #b8324a;
+    --maroon-ink: #f0a3ae;
+    --maroon-soft: #3a1d23;
+    --on-maroon: #ffffff;
+    --marigold: #f5b53d;
+    --marigold-ink: #f5c25e;
+    --marigold-soft: #3a2c12;
+    --peacock: #5cc3c6;
+    --peacock-soft: #15302f;
+    --leaf: #6fcf9a;
+    --leaf-soft: #16301f;
+    --danger: #ff8a7f;
+    --danger-soft: #3b1714;
+    --chart-sales: #a99f9b;
+    --chart-actual: #f4eeea;
+    --chart-unmet: #e06a7c;
+    --chart-sensed: #ec7f90;
+    --focus: #f5c25e;
+    --shadow-float: 0 16px 40px -12px rgb(0 0 0 / 0.6), 0 2px 6px rgb(0 0 0 / 0.3);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #151213;
+  --surface: #1d191a;
+  --surface-2: #262122;
+  --surface-3: #302a2b;
+  --line: #362f30;
+  --line-strong: #4a4142;
+  --ink: #f4eeea;
+  --ink-2: #c9bfbb;
+  --ink-3: #a99f9b;
+  --maroon: #a3283c;
+  --maroon-hover: #b8324a;
+  --maroon-ink: #f0a3ae;
+  --maroon-soft: #3a1d23;
+  --on-maroon: #ffffff;
+  --marigold: #f5b53d;
+  --marigold-ink: #f5c25e;
+  --marigold-soft: #3a2c12;
+  --peacock: #5cc3c6;
+  --peacock-soft: #15302f;
+  --leaf: #6fcf9a;
+  --leaf-soft: #16301f;
+  --danger: #ff8a7f;
+  --danger-soft: #3b1714;
+  --chart-sales: #a99f9b;
+  --chart-actual: #f4eeea;
+  --chart-unmet: #e06a7c;
+  --chart-sensed: #ec7f90;
+  --focus: #f5c25e;
+  --shadow-float: 0 16px 40px -12px rgb(0 0 0 / 0.6), 0 2px 6px rgb(0 0 0 / 0.3);
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-maroon: var(--maroon);
+  --color-maroon-hover: var(--maroon-hover);
+  --color-maroon-ink: var(--maroon-ink);
+  --color-maroon-soft: var(--maroon-soft);
+  --color-on-maroon: var(--on-maroon);
+  --color-marigold: var(--marigold);
+  --color-marigold-ink: var(--marigold-ink);
+  --color-marigold-soft: var(--marigold-soft);
+  --color-peacock: var(--peacock);
+  --color-peacock-soft: var(--peacock-soft);
+  --color-leaf: var(--leaf);
+  --color-leaf-soft: var(--leaf-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --font-sans: "Anek Latin", "Anek Tamil", "Anek Devanagari", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --shadow-float: var(--shadow-float);
+}
+
+/* ---------- Base ---------- */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-rendering: optimizeLegibility;
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.5;
+  font-variation-settings: "wdth" 100;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+}
+#root {
+  min-height: 100dvh;
+}
+::selection {
+  background: var(--marigold-soft);
+  color: var(--ink);
+}
+
+@layer base {
+  :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+}
+
+/* Display type: Anek's condensed width, used for headlines and figures */
+.display {
+  font-variation-settings: "wdth" 78;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 0.98;
+}
+.display-tight {
+  font-variation-settings: "wdth" 84;
+  font-weight: 650;
+  letter-spacing: -0.005em;
+}
+.figure {
+  font-variation-settings: "wdth" 82;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums lining-nums;
+}
+.num {
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+/* Saree-border rule that crowns the app */
+.zari-rule {
+  height: 4px;
+  background:
+    linear-gradient(var(--marigold), var(--marigold)) bottom / 100% 1px no-repeat,
+    var(--maroon);
+}
+
+/* Hatch used for the forecast "gap" wedge */
+.hatch {
+  background-image: repeating-linear-gradient(
+    135deg,
+    color-mix(in oklab, var(--marigold) 55%, transparent) 0 2px,
+    color-mix(in oklab, var(--marigold) 18%, transparent) 2px 6px
+  );
+}
+
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* ---------- Motion ---------- */
+@keyframes rn-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes rn-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes rn-flash {
+  0% { background-color: var(--marigold-soft); box-shadow: inset 3px 0 0 var(--marigold); }
+  70% { background-color: var(--marigold-soft); box-shadow: inset 3px 0 0 var(--marigold); }
+  100% { background-color: transparent; box-shadow: inset 3px 0 0 transparent; }
+}
+@keyframes rn-slide-down {
+  from { opacity: 0; transform: translateY(-10px); max-height: 0; }
+  to { opacity: 1; transform: none; max-height: 240px; }
+}
+@keyframes rn-pulse-dot {
+  0%, 100% { opacity: 0.35; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1); }
+}
+@keyframes rn-travel {
+  0% { left: 0%; opacity: 0; }
+  10% { opacity: 1; }
+  90% { opacity: 1; }
+  100% { left: 100%; opacity: 0; }
+}
+@keyframes rn-draw {
+  from { stroke-dashoffset: var(--len, 400); }
+  to { stroke-dashoffset: 0; }
+}
+@keyframes rn-grow-x {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+@keyframes rn-shimmer {
+  from { background-position: -200% 0; }
+  to { background-position: 200% 0; }
+}
+@keyframes rn-toast-in {
+  from { opacity: 0; transform: translateY(-12px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes rn-ring {
+  0% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--marigold) 70%, transparent); }
+  100% { box-shadow: 0 0 0 10px transparent; }
+}
+
+.anim-rise { animation: rn-rise 420ms cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+.anim-fade { animation: rn-fade 320ms ease-out both; }
+.anim-flash { animation: rn-flash 2600ms ease-out both; }
+.anim-slide-down { animation: rn-slide-down 480ms cubic-bezier(0.2, 0.7, 0.2, 1) both; overflow: hidden; }
+.anim-toast { animation: rn-toast-in 360ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.anim-ring { animation: rn-ring 1.2s ease-out 2; }
+.typing-dot { animation: rn-pulse-dot 1.1s ease-in-out infinite; }
+
+.skeleton {
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 50%, var(--surface-2) 75%);
+  background-size: 200% 100%;
+  animation: rn-shimmer 1.6s linear infinite;
+  border-radius: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Recharts: inherit our type */
+.recharts-wrapper, .recharts-surface { font-family: var(--font-sans); }
+.recharts-cartesian-axis-tick-value { font-size: 12px; fill: var(--ink-3); }

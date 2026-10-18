@@ -180,13 +180,14 @@ async def reserve(req: ItemRequest):
     if not p:
         raise ApiError(404, "unknown_sku", f"We couldn't find {req.sku}.")
     size = (req.size or "FREE").upper()
+    size_txt = f" (size {size})" if size != "FREE" else ""
     rows = (await inv.inventory_for_skus([p["sku"]])).get(p["sku"], [])
     if inv.qty_at(rows, store_id, size) <= 0:
         raise ApiError(409, "out_of_stock",
-                       f"{p.get('name')} ({size}) is out of stock at {config.store_name(store_id)}. Try notify-me or another store.")
+                       f"{p.get('name')}{size_txt} is out of stock at {config.store_name(store_id)}. Try notify-me or another store.")
     r = await inv.create_reservation(req.session_id, p["sku"], size, store_id)
     return {"reservation_id": r["reservation_id"], "hold_until": r["hold_until"],
-            "message": f"Reserved! {p.get('name')} ({size}) is held for you at {config.store_name(store_id)} for 48 hours."}
+            "message": f"Reserved! {p.get('name')}{size_txt} is held for you at {config.store_name(store_id)} for 48 hours."}
 
 
 @app.get("/api/notifications")
