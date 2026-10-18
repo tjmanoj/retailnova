@@ -14,6 +14,9 @@ import type {
   ResetResponse,
   SSEEvent,
   ApiErrorBody,
+  AssistRequest,
+  AssistResponse,
+  Profile,
 } from '../types'
 import { isMock } from './mockMode'
 
@@ -186,6 +189,9 @@ export const api = {
   approve: (actionId: string) => request<ApproveResponse>('POST', `/api/actions/${encodeURIComponent(actionId)}/approve`),
   reject: (actionId: string) => request<RejectResponse>('POST', `/api/actions/${encodeURIComponent(actionId)}/reject`),
   reset: () => request<ResetResponse>('POST', '/api/demo/reset'),
+  assist: (b: AssistRequest) => request<AssistResponse>('POST', '/api/assist', b),
+  profile: (sessionId: string) => request<Profile>('GET', `/api/profile?session_id=${encodeURIComponent(sessionId)}`),
+  forget: (sessionId: string) => request<{ forgotten: boolean }>('POST', '/api/profile/forget', { session_id: sessionId }),
   chat: (b: ChatRequest, onEvent: SSEHandler, signal?: AbortSignal) => streamSSE('/api/chat', b, onEvent, signal),
   plan: (b: PlanRequest, onEvent: SSEHandler, signal?: AbortSignal) => streamSSE('/api/plan', b, onEvent, signal),
   ask: (b: AskRequest, onEvent: SSEHandler, signal?: AbortSignal) => streamSSE('/api/ask', b, onEvent, signal),

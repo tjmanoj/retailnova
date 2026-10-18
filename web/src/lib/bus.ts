@@ -8,6 +8,14 @@ type BusEvents = {
   signal: DemandSignal
   notification: Notification
   reset: null
+  /** Guided demo: type this text into the shopper composer and send it. */
+  demoType: string
+  /** Guided demo: switch the Live Loop tab on narrow screens. */
+  demoTab: 'shop' | 'manager'
+  /** Guided demo stopped: cancel any typing in progress. */
+  demoCancel: null
+  /** Radar should refresh (e.g. after an approval or a walk-in log). */
+  radarRefresh: null
 }
 
 type Handler<T> = (payload: T) => void

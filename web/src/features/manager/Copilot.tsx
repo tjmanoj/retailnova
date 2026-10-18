@@ -14,13 +14,15 @@ import {
   RefreshCw,
   Send,
   Sparkles,
+  Sunrise,
+  TrendingUp,
   Truck,
   X,
 } from 'lucide-react'
 import type { ActionProposal, ApproveResponse, Category, EvidenceKind, PlanStep, PlanStepId } from '../../types'
 import { api } from '../../lib/api'
 import { emit, on } from '../../lib/bus'
-import { categoryLabel, DIWALI_DATE, storeName } from '../../lib/constants'
+import { categoryLabel, DAYS_TO_DIWALI, DEMO_TODAY, DIWALI_DATE, storeName } from '../../lib/constants'
 import { daysBetween, formatINR, formatNumber, longDate, pct, shortDate, sizeLabel } from '../../lib/format'
 import { getSessionId } from '../../lib/session'
 import { useActionUpdates, useProductInfo } from '../../lib/realtime'
@@ -113,6 +115,38 @@ export function Copilot({ storeId, category }: { storeId: string; category: Cate
     if (!ctrl.signal.aborted) setState(failed ? 'error' : 'done')
   }, [storeId, category])
 
+  // §9.8 Morning brief: a canned /api/ask question streamed into its own card.
+  const [brief, setBrief] = useState<{ text: string; acts: ActivityState[]; busy: boolean; error: string | null } | null>(null)
+  const briefAbort = useRef<AbortController | null>(null)
+  useEffect(() => {
+    briefAbort.current?.abort()
+    setBrief(null)
+  }, [storeId])
+  useEffect(() => on('reset', () => setBrief(null)), [])
+  const morningBrief = useCallback(async () => {
+    briefAbort.current?.abort()
+    const ctrl = new AbortController()
+    briefAbort.current = ctrl
+    setBrief({ text: '', acts: [], busy: true, error: null })
+    const question = `Give me my morning brief for ${storeName(storeId)}: what changed, top 3 risks before Diwali, and the 3 actions I should take today.`
+    await api.ask(
+      { store_id: storeId, question, session_id: getSessionId() },
+      (e) => {
+        setBrief((b) => {
+          if (!b) return b
+          if (e.event === 'activity')
+            return { ...b, acts: b.acts.some((a) => a.id === e.data.id) ? b.acts.map((a) => (a.id === e.data.id ? { ...a, ...e.data } : a)) : [...b.acts, e.data] }
+          if (e.event === 'text') return { ...b, text: b.text + e.data.delta }
+          if (e.event === 'error') return { ...b, error: e.data.message }
+          if (e.event === 'done') return { ...b, busy: false, acts: b.acts.map((a) => ({ ...a, status: 'end' as const })) }
+          return b
+        })
+      },
+      ctrl.signal,
+    )
+    if (!ctrl.signal.aborted) setBrief((b) => (b ? { ...b, busy: false } : b))
+  }, [storeId])
+
   const stepList = STEP_ORDER.map((id) => steps[id]).filter(Boolean) as PlanStep[]
   const extra = Object.values(steps).filter((s) => !STEP_ORDER.includes(s.id))
 
@@ -128,16 +162,63 @@ export function Copilot({ storeId, category }: { storeId: string; category: Cate
             Plans transfers and reorders for {storeName(storeId)}, {categoryLabel(category).toLowerCase()}, before Diwali. You approve every action.
           </p>
         </div>
+        <div className="flex flex-wrap gap-2">
+        <Button variant="secondary" size="md" onClick={morningBrief} loading={brief?.busy} icon={<Sunrise className="size-4" aria-hidden />}>
+          Morning brief
+        </Button>
         <Button
           variant="primary"
           size="md"
+          data-demo="generate-plan"
           onClick={generate}
           loading={state === 'running'}
           icon={state === 'done' || state === 'error' ? <RefreshCw className="size-4" aria-hidden /> : <Sparkles className="size-4" aria-hidden />}
         >
           {state === 'running' ? 'Planning…' : state === 'idle' ? 'Generate Diwali action plan' : 'Regenerate plan'}
         </Button>
+        </div>
       </header>
+
+      {brief && (
+        <div className="border-b border-line px-4 py-4 @[560px]:px-5">
+          <article className="anim-rise rounded-2xl border border-marigold/50 bg-marigold-soft/60 p-4" aria-live="polite" aria-busy={brief.busy}>
+            <header className="mb-2 flex items-start justify-between gap-3">
+              <div>
+                <h3 className="display-tight flex items-center gap-2 text-lg text-ink">
+                  <Sunrise className="size-4 text-marigold-ink" aria-hidden />
+                  Morning brief
+                </h3>
+                <p className="text-xs text-ink-3">
+                  {storeName(storeId)}, {longDate(DEMO_TODAY)}, {DAYS_TO_DIWALI} days to Diwali
+                </p>
+              </div>
+              <button onClick={() => (briefAbort.current?.abort(), setBrief(null))} className="rounded-lg p-1 text-ink-3 hover:bg-surface hover:text-ink" aria-label="Close morning brief">
+                <X className="size-4" aria-hidden />
+              </button>
+            </header>
+            <ActivityChips items={brief.acts} className="mb-2" />
+            {brief.text ? (
+              <div className="text-sm leading-relaxed text-ink">
+                <RichText text={brief.text} className="space-y-1.5" />
+              </div>
+            ) : brief.busy ? (
+              <div className="space-y-2" aria-hidden>
+                <Skeleton className="h-3.5 w-3/4" />
+                <Skeleton className="h-3.5 w-full" />
+                <Skeleton className="h-3.5 w-5/6" />
+              </div>
+            ) : null}
+            {brief.error && (
+              <p className="mt-2 flex items-center gap-2 text-sm text-danger" role="alert">
+                {brief.error}
+                <button onClick={morningBrief} className="rounded-md bg-surface px-2 py-0.5 text-xs font-semibold text-ink">
+                  Try again
+                </button>
+              </p>
+            )}
+          </article>
+        </div>
+      )}
 
       {state === 'idle' ? (
         <div className="grid gap-4 px-4 py-5 @[560px]:grid-cols-[1fr_auto] @[560px]:px-5">
@@ -254,7 +335,7 @@ function StepItem({ s, last }: { s: PlanStep; last: boolean }) {
       <div className="min-w-0 pt-0.5">
         <p className="flex items-baseline gap-2 text-sm font-semibold text-ink">
           {s.label}
-          {dur != null && dur > 0 && <span className="num text-[11px] font-normal text-ink-3">{dur.toFixed(1)}s</span>}
+          {dur != null && dur >= 0.1 && <span className="num text-[11px] font-normal text-ink-3">{dur.toFixed(1)}s</span>}
           <span className="sr-only">, {s.status}</span>
         </p>
         {s.summary ? (
@@ -262,8 +343,75 @@ function StepItem({ s, last }: { s: PlanStep; last: boolean }) {
         ) : s.status === 'running' ? (
           <p className="mt-0.5 text-[13px] text-ink-3">Working…</p>
         ) : null}
+        {s.id === 'trends' && s.status === 'done' && <TrendDetails data={s.data} summary={s.summary} />}
       </div>
     </li>
+  )
+}
+
+function hostOf(url: string) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '')
+  } catch {
+    return url
+  }
+}
+
+export function SourceChip({ url, title }: { url: string; title?: string }) {
+  // Search grounding links go through a redirect host; the title usually carries the real site.
+  const t = (title ?? '').trim()
+  const titleIsDomain = /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(t)
+  const urlHost = hostOf(url)
+  const redirect = /vertexaisearch|googleusercontent|google\.com$/i.test(urlHost)
+  const host = titleIsDomain ? t.replace(/^www\./, '') : redirect && t ? t : urlHost
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={title || host}
+      className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-line bg-surface px-2 py-0.5 text-[11px] font-medium text-ink-2 hover:border-ink-3 hover:text-ink"
+    >
+      <img
+        src={`https://www.google.com/s2/favicons?domain=${encodeURIComponent(titleIsDomain || !redirect ? host : urlHost)}&sz=32`}
+        alt=""
+        width={12}
+        height={12}
+        loading="lazy"
+        className="size-3 shrink-0 rounded-sm"
+        onError={(e) => (e.currentTarget.style.display = 'none')}
+      />
+      <span className="max-w-[180px] truncate">{host}</span>
+      <span className="sr-only"> (opens in a new tab)</span>
+    </a>
+  )
+}
+
+/** §9.4: market insights and the web sources behind them. */
+function TrendDetails({ data, summary }: { data?: Record<string, unknown> | null; summary?: string }) {
+  const insights = Array.isArray(data?.insights) ? (data!.insights as string[]).filter((t) => t.trim() !== (summary ?? '').trim()).slice(0, 3) : []
+  const sources = Array.isArray(data?.sources) ? (data!.sources as { title?: string; url?: string }[]).filter((x) => x?.url).slice(0, 4) : []
+  if (!insights.length && !sources.length) return null
+  return (
+    <div className="mt-1.5 space-y-1.5">
+      {insights.length > 0 && (
+        <ul className="space-y-1">
+          {insights.map((t, i) => (
+            <li key={i} className="flex gap-1.5 text-[12px] leading-snug text-ink-2">
+              <TrendingUp className="mt-0.5 size-3 shrink-0 text-marigold-ink" aria-hidden />
+              {t}
+            </li>
+          ))}
+        </ul>
+      )}
+      {sources.length > 0 && (
+        <div className="flex flex-wrap gap-1" aria-label="Sources">
+          {sources.map((src, i) => (
+            <SourceChip key={i} url={src.url!} title={src.title} />
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -377,7 +525,16 @@ function ProposalCard({ p: initial }: { p: ActionProposal }) {
               <li key={i} className="flex items-start gap-2 text-[13px] text-ink-2">
                 <I className="mt-0.5 size-3.5 shrink-0 text-ink-3" aria-hidden />
                 <span className="sr-only">{ev.kind}: </span>
-                <span className="flex-1">{ev.text}</span>
+                <span className="flex-1">
+                  {ev.url ? (
+                    <a href={ev.url} target="_blank" rel="noopener noreferrer" className="underline decoration-line-strong underline-offset-2 hover:text-ink hover:decoration-ink-3">
+                      {ev.text}
+                      <span className="sr-only"> (source, opens in a new tab)</span>
+                    </a>
+                  ) : (
+                    ev.text
+                  )}
+                </span>
                 {ev.value != null && !ev.text.includes(formatNumber(ev.value)) && !ev.text.includes(String(ev.value)) && (
                   <span className="figure shrink-0 text-sm text-ink">{formatEvidence(ev.value)}</span>
                 )}
@@ -404,7 +561,15 @@ function ProposalCard({ p: initial }: { p: ActionProposal }) {
       <div className="px-4 pt-3 pb-4" aria-live="polite">
         {!decided ? (
           <div className="flex flex-wrap gap-2">
-            <Button variant="primary" onClick={() => decide('approve')} loading={busy === 'approve'} disabled={busy !== null} icon={<Check className="size-4" aria-hidden />}>
+            <Button
+              variant="primary"
+              onClick={() => decide('approve')}
+              loading={busy === 'approve'}
+              disabled={busy !== null}
+              icon={<Check className="size-4" aria-hidden />}
+              data-demo="approve"
+              data-type={p.type}
+            >
               Approve {typeLabel.toLowerCase()}
             </Button>
             <Button variant="ghost" onClick={() => decide('reject')} loading={busy === 'reject'} disabled={busy !== null} icon={<X className="size-4" aria-hidden />}>

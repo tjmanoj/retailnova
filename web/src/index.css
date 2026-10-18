@@ -313,6 +313,18 @@ body {
   border-radius: 8px;
 }
 
+@keyframes rn-spot {
+  0%, 100% { box-shadow: 0 0 0 3px var(--marigold), 0 0 0 8px color-mix(in oklab, var(--marigold) 25%, transparent); }
+  50% { box-shadow: 0 0 0 3px var(--marigold), 0 0 0 14px color-mix(in oklab, var(--marigold) 8%, transparent); }
+}
+/* Guided demo: the element the caption is talking about */
+.demo-spotlight {
+  position: relative;
+  z-index: 5;
+  border-radius: 14px;
+  animation: rn-spot 1.4s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 1ms !important;

@@ -2,13 +2,14 @@ import { useMemo, useState } from 'react'
 import { BellPlus, Check, MapPin, PackageCheck, ShoppingBag, Truck } from 'lucide-react'
 import type { Notification, ProductCard as Product } from '../../types'
 import { ProductImage } from '../../components/ProductImage'
+import { PickupPass } from '../../components/PickupPass'
 import { Badge, Button, cx } from '../../components/ui'
 import { discountPct, formatINR, sizeLabel } from '../../lib/format'
 import { storeName } from '../../lib/constants'
 import { api } from '../../lib/api'
 import { getSessionId } from '../../lib/session'
 
-type Done = { kind: 'notify' | 'reserve'; message: string; store: string }
+type Done = { kind: 'notify' | 'reserve'; message: string; store: string; reservationId?: string; holdUntil?: string }
 
 export function ProductCard({ p, onDone, alert }: { p: Product; onDone?: (d: Done) => void; alert?: Notification }) {
   const here = p.availability.find((a) => a.store_id === p.requested_store_id)
@@ -42,8 +43,14 @@ export function ProductCard({ p, onDone, alert }: { p: Product; onDone?: (d: Don
     setErr(null)
     try {
       const body = { session_id: getSessionId(), sku: p.sku, size, store_id: storeId }
-      const res = kind === 'notify' ? await api.notify(body) : await api.reserve(body)
-      const d: Done = { kind, message: res.message, store: storeId }
+      let d: Done
+      if (kind === 'notify') {
+        const res = await api.notify(body)
+        d = { kind, message: res.message, store: storeId }
+      } else {
+        const res = await api.reserve(body)
+        d = { kind, message: res.message, store: storeId, reservationId: res.reservation_id, holdUntil: res.hold_until }
+      }
       setDone(d)
       onDone?.(d)
     } catch (e) {
@@ -83,7 +90,7 @@ export function ProductCard({ p, onDone, alert }: { p: Product; onDone?: (d: Don
   })()
 
   return (
-    <article className="flex w-[244px] shrink-0 snap-start flex-col overflow-hidden rounded-2xl border border-line bg-surface @[640px]:w-auto">
+    <article className="flex w-[244px] shrink-0 snap-start flex-col overflow-hidden rounded-2xl border border-line bg-surface @[640px]:w-auto" data-sku={p.sku}>
       <div className="relative">
         <ProductImage src={p.image_url} alt={p.image_alt} color={p.color} category={p.category} className="aspect-square w-full" />
         <div className="absolute top-2 left-2 max-w-[calc(100%-1rem)] [&>span]:shadow-sm">{badge}</div>
@@ -167,14 +174,36 @@ export function ProductCard({ p, onDone, alert }: { p: Product; onDone?: (d: Don
                   <PackageCheck className="size-4 shrink-0" aria-hidden />
                   {alert.kind === 'reserved' ? `Reserved for you at ${storeName(alert.store_id)}` : `Back at ${storeName(alert.store_id)}`}
                 </p>
-                <p className="mt-1 text-ink-2">{alert.message}</p>
+                {alert.kind !== 'reserved' && <p className="mt-1 text-ink-2">{alert.message}</p>}
+                {alert.kind === 'reserved' && (
+                  <div className="mt-2">
+                    <PickupPass
+                      compact
+                      data={{
+                        ref: alert.notification_id,
+                        storeId: alert.store_id,
+                        sku: p.sku,
+                        productName: p.name,
+                        holdUntil: alert.created_at ? new Date(new Date(alert.created_at).getTime() + 48 * 3600_000).toISOString() : null,
+                      }}
+                    />
+                  </div>
+                )}
               </div>
             )
           ) : done ? (
-            <p className="anim-fade flex items-start gap-2 rounded-xl bg-leaf-soft px-2.5 py-2 text-xs font-medium text-leaf">
-              <Check className="mt-px size-3.5 shrink-0" aria-hidden />
-              <span>{done.message}</span>
-            </p>
+            <div className="space-y-2">
+              <p className="anim-fade flex items-start gap-2 rounded-xl bg-leaf-soft px-2.5 py-2 text-xs font-medium text-leaf">
+                <Check className="mt-px size-3.5 shrink-0" aria-hidden />
+                <span>{done.message}</span>
+              </p>
+              {done.kind === 'reserve' && done.reservationId && (
+                <PickupPass
+                  compact
+                  data={{ ref: done.reservationId, storeId: done.store, sku: p.sku, productName: p.name, holdUntil: done.holdUntil }}
+                />
+              )}
+            </div>
           ) : sizeHere && herePhysical ? (
             <Button
               variant="primary"
@@ -195,6 +224,8 @@ export function ProductCard({ p, onDone, alert }: { p: Product; onDone?: (d: Don
                 loading={busy === 'notify'}
                 icon={<BellPlus className="size-4" aria-hidden />}
                 onClick={() => act('notify', p.requested_store_id)}
+                data-demo="notify"
+                data-sku={p.sku}
               >
                 Notify me
               </Button>

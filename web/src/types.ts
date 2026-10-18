@@ -29,7 +29,7 @@ export interface ProductCard {
   reason?: string | null // one line: why it was recommended
 }
 
-export type SignalChannel = 'chat' | 'image_search' | 'store_assist'
+export type SignalChannel = 'chat' | 'image_search' | 'store_assist' | 'voice'
 export type SignalOutcome = 'fulfilled' | 'substituted' | 'unmet'
 export type SignalReason = 'out_of_stock' | 'size_unavailable' | 'not_carried' | 'price_too_high' | 'other'
 
@@ -73,6 +73,7 @@ export interface Evidence {
   kind: EvidenceKind
   text: string
   value?: number | null
+  url?: string | null // §9.4: trend evidence carries a source URL when available
 }
 
 export type ActionType = 'transfer' | 'reorder' | 'markdown' | 'assortment'
@@ -133,11 +134,28 @@ export interface ActivityEvent {
   status: 'start' | 'end'
 }
 
+export interface Guardrail {
+  provider: 'model_armor'
+  verdict: 'blocked' | 'allowed'
+  categories?: string[]
+}
+
 export interface DoneEvent {
   latency_ms: number
   model: string
   session_id?: string
   plan_id?: string
+  guardrail?: Guardrail | null // §9.5
+}
+
+export interface Preference {
+  key: string
+  value: string
+}
+
+export interface MemoryEvent {
+  summary: string
+  preferences: Preference[]
 }
 
 export interface ErrorEvent {
@@ -152,6 +170,8 @@ export type SSEEvent =
   | { event: 'signal'; data: { signal: DemandSignal } }
   | { event: 'step'; data: { step: PlanStep } }
   | { event: 'proposal'; data: { proposal: ActionProposal } }
+  | { event: 'transcript'; data: { text: string; language: string } }
+  | { event: 'memory'; data: MemoryEvent }
   | { event: 'error'; data: ErrorEvent }
   | { event: 'done'; data: DoneEvent }
 
@@ -159,10 +179,20 @@ export type SSEEventName = SSEEvent['event']
 
 // ---------- REST payloads (contracts §5) ----------
 
+export interface Features {
+  voice: boolean
+  store_assist: boolean
+  trends: boolean
+  model_armor: boolean
+  memory: 'memory_bank' | 'firestore' | null
+  guided_demo: boolean
+}
+
 export interface HealthResponse {
   status: 'ok'
   version: string
   time: string
+  features?: Features
 }
 
 export interface Bootstrap {
@@ -173,6 +203,7 @@ export interface Bootstrap {
   categories: { category: Category; label: string }[]
   sample_prompts: { shopper: string[]; manager: string[] }
   reset_at: string | null
+  features?: Features // §9.1
 }
 
 export interface ChatRequest {
@@ -181,7 +212,32 @@ export interface ChatRequest {
   store_id?: string
   image_base64?: string
   image_mime?: 'image/jpeg' | 'image/png' | 'image/webp'
+  audio_base64?: string // §9.2
+  audio_mime?: AudioMime
   language_hint?: 'auto' | 'en' | 'hi' | 'ta'
+}
+
+export type AudioMime = 'audio/webm' | 'audio/ogg' | 'audio/mp4' | 'audio/mpeg' | 'audio/wav'
+
+export interface AssistRequest {
+  store_id: string
+  text?: string
+  audio_base64?: string
+  audio_mime?: AudioMime
+}
+
+export interface AssistResponse {
+  signal: DemandSignal | null
+  transcript: string | null
+  message: string
+}
+
+export interface Profile {
+  session_id: string
+  summary: string
+  preferences: Preference[]
+  source: 'memory_bank' | 'firestore' | null
+  updated_at: string | null
 }
 
 export interface ItemRequest {
@@ -275,10 +331,20 @@ export interface Radar {
     stockouts_now: number
     signals_today: number
     forecast_gap_units_21d: number
+    revenue_protected_inr?: number // §9.7
   }
   top_gaps: RadarGap[]
   series: RadarPoint[]
   recent_signals: DemandSignal[]
+  assortment_gaps?: AssortmentGap[] // §9.7
+}
+
+export interface AssortmentGap {
+  label: string
+  category: Category
+  asks_7d: number
+  est_value_7d_inr: number
+  examples: string[]
 }
 
 export interface ApiErrorBody {

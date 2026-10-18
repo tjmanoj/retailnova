@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
-import type { Bootstrap } from '../types'
+import type { Bootstrap, Features } from '../types'
 import { api } from './api'
 import { CATEGORIES, DAYS_TO_DIWALI, DEMO_TODAY, DIWALI_DATE, SAMPLE_MANAGER_PROMPTS, SAMPLE_SHOPPER_PROMPTS, STORES } from './constants'
 
@@ -41,4 +41,12 @@ export function BootstrapProvider({ children }: { children: ReactNode }) {
 
 export function useBootstrap() {
   return useContext(Ctx)
+}
+
+const NO_FEATURES: Features = { voice: false, store_assist: false, trends: false, model_armor: false, memory: null, guided_demo: false }
+
+/** §9.1 feature flags. Every v1.1 control hides when its flag is off (or before the backend reports flags). */
+export function useFeatures(): Features {
+  const b = useContext(Ctx)
+  return { ...NO_FEATURES, ...(b.features ?? {}) }
 }

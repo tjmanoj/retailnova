@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
-import { ArrowUp, Bell, BellRing, Camera, ImagePlus, MapPin, PackageCheck, RefreshCw, Store as StoreIcon, Truck, X } from 'lucide-react'
-import type { ChatRequest, DemandSignal, Notification, ProductCard as Product } from '../../types'
+import { ArrowUp, Bell, BellRing, Camera, ImagePlus, MapPin, Mic, PackageCheck, RefreshCw, ShieldCheck, Sparkles, Store as StoreIcon, Truck, X } from 'lucide-react'
+import type { ChatRequest, DemandSignal, Guardrail, MemoryEvent, Notification, Preference, Profile, ProductCard as Product } from '../../types'
 import { api } from '../../lib/api'
 import { getSessionId } from '../../lib/session'
-import { useBootstrap } from '../../lib/bootstrap'
+import { useBootstrap, useFeatures } from '../../lib/bootstrap'
 import { DEFAULT_STORE, storeName } from '../../lib/constants'
 import { emit, on } from '../../lib/bus'
 import { announceSignal, useNotifications } from '../../lib/realtime'
-import { relativeTime } from '../../lib/format'
+import { formatINR, relativeTime } from '../../lib/format'
+import { MicButton, RecorderBar, formatClock, languageName, useVoiceRecorder, voiceSupported, type Recording } from '../../components/VoiceRecorder'
 import { ActivityChips, type ActivityState } from '../../components/ActivityChips'
 import { RichText } from '../../components/RichText'
 import { ToastCard } from '../../components/Toast'
@@ -25,6 +26,10 @@ interface Turn {
   error?: { message: string; retryable: boolean }
   streaming?: boolean
   request?: ChatRequest
+  userId?: string // assistant turns: the user turn they answer
+  voice?: { seconds: number; language?: string; pending?: boolean } // user turns sent as a voice note
+  memory?: MemoryEvent
+  guardrail?: Guardrail | null
 }
 
 type Attachment = { dataUrl: string; base64: string; mime: 'image/jpeg' | 'image/png' | 'image/webp'; name: string }
@@ -86,6 +91,33 @@ export function ShopView({ initialPrompt, embedded = false, onConsumedPrompt }: 
   const textarea = useRef<HTMLTextAreaElement>(null)
   const abortRef = useRef<AbortController | null>(null)
   const consumed = useRef(false)
+
+  const features = useFeatures()
+  const voiceOn = features.voice && voiceSupported()
+  const memoryOn = Boolean(features.memory)
+  const [profile, setProfile] = useState<Profile | null>(null)
+  const profileTimers = useRef<number[]>([])
+
+  // Memories are written in the background after a turn, so check a few times as they settle.
+  const refreshProfile = useCallback(
+    (delays: number[] = [0]) => {
+      if (!memoryOn) return
+      profileTimers.current.forEach((t) => window.clearTimeout(t))
+      profileTimers.current = delays.map((d) =>
+        window.setTimeout(() => {
+          api
+            .profile(sessionId)
+            .then(setProfile)
+            .catch(() => {})
+        }, d),
+      )
+    },
+    [memoryOn, sessionId],
+  )
+  useEffect(() => {
+    refreshProfile()
+    return () => profileTimers.current.forEach((t) => window.clearTimeout(t))
+  }, [refreshProfile])
 
   const physicalStores = boot.stores.filter((s) => s.type === 'store')
   const onlineStore = boot.stores.find((s) => s.type === 'online')
@@ -183,6 +215,24 @@ export function ShopView({ initialPrompt, embedded = false, onConsumedPrompt }: 
             patch(assistantId, (t) => ({ ...t, signal: e.data.signal }))
             announceSignal(e.data.signal)
             break
+          case 'transcript':
+            setTurns((ts) => {
+              const asst = ts.find((t) => t.id === assistantId)
+              return ts.map((t) =>
+                t.id === asst?.userId ? { ...t, text: e.data.text, voice: { seconds: t.voice?.seconds ?? 0, language: e.data.language, pending: false } } : t,
+              )
+            })
+            break
+          case 'memory':
+            patch(assistantId, (t) => ({ ...t, memory: e.data }))
+            setProfile((p) => ({
+              session_id: sessionId,
+              summary: e.data.summary,
+              preferences: e.data.preferences,
+              source: p?.source ?? null,
+              updated_at: new Date().toISOString(),
+            }))
+            break
           case 'error':
             patch(assistantId, (t) => ({ ...t, error: e.data }))
             break
@@ -190,6 +240,7 @@ export function ShopView({ initialPrompt, embedded = false, onConsumedPrompt }: 
             patch(assistantId, (t) => ({
               ...t,
               streaming: false,
+              guardrail: e.data.guardrail ?? null,
               activities: t.activities.map((a) => ({ ...a, status: 'end' as const })),
             }))
             break
@@ -198,8 +249,13 @@ export function ShopView({ initialPrompt, embedded = false, onConsumedPrompt }: 
       ctrl.signal,
     )
     patch(assistantId, (t) => ({ ...t, streaming: false }))
+    setTurns((ts) => {
+      const asst = ts.find((t) => t.id === assistantId)
+      return ts.map((t) => (t.id === asst?.userId && t.voice?.pending ? { ...t, voice: { ...t.voice, pending: false } } : t))
+    })
     setBusy(false)
-  }, [])
+    refreshProfile([2000, 6000, 15000])
+  }, [refreshProfile, sessionId])
 
   const send = useCallback(
     (text: string, att: Attachment | null = null) => {
@@ -213,7 +269,7 @@ export function ShopView({ initialPrompt, embedded = false, onConsumedPrompt }: 
         ...(att ? { image_base64: att.base64, image_mime: att.mime } : {}),
       }
       const userTurn: Turn = { id: tid(), role: 'user', text: message, image: att?.dataUrl, activities: [], products: [] }
-      const asst: Turn = { id: tid(), role: 'assistant', text: '', activities: [], products: [], streaming: true, request: req }
+      const asst: Turn = { id: tid(), role: 'assistant', text: '', activities: [], products: [], streaming: true, request: req, userId: userTurn.id }
       setTurns((ts) => [...ts, userTurn, asst])
       setInput('')
       setAttachment(null)
@@ -222,9 +278,76 @@ export function ShopView({ initialPrompt, embedded = false, onConsumedPrompt }: 
     [busy, run, sessionId, storeId],
   )
 
+  const sendVoice = useCallback(
+    (rec: Recording) => {
+      if (busy) return
+      const req: ChatRequest = {
+        session_id: sessionId,
+        message: '',
+        store_id: storeId,
+        language_hint: 'auto',
+        audio_base64: rec.base64,
+        audio_mime: rec.mime,
+      }
+      const userTurn: Turn = { id: tid(), role: 'user', text: '', voice: { seconds: rec.seconds, pending: true }, activities: [], products: [] }
+      const asst: Turn = { id: tid(), role: 'assistant', text: '', activities: [], products: [], streaming: true, request: req, userId: userTurn.id }
+      setTurns((ts) => [...ts, userTurn, asst])
+      void run(req, asst.id)
+    },
+    [busy, run, sessionId, storeId],
+  )
+  const recorder = useVoiceRecorder((r) => r && sendVoice(r))
+  const { error: recError, setError: setRecError } = recorder
+  useEffect(() => {
+    if (recError) {
+      setNotice(recError)
+      setRecError(null)
+    }
+  }, [recError, setRecError])
+  const recording = recorder.state === 'recording'
+  const finishVoice = async () => {
+    const r = await recorder.stop()
+    if (r) sendVoice(r)
+  }
+
+  // Guided demo: type the hero prompt like a person would, then send it.
+  const sendRef = useRef(send)
+  sendRef.current = send
+  const typingTimer = useRef<number | undefined>(undefined)
+  useEffect(() => {
+    const offType = on('demoType', (text) => {
+      const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      if (reduce) {
+        sendRef.current(text)
+        return
+      }
+      let i = 0
+      const step = () => {
+        i = Math.min(text.length, i + 2)
+        setInput(text.slice(0, i))
+        typingTimer.current = window.setTimeout(i < text.length ? step : () => sendRef.current(text), i < text.length ? 28 : 350)
+      }
+      step()
+    })
+    const offCancel = on('demoCancel', () => {
+      window.clearTimeout(typingTimer.current)
+      setInput('')
+    })
+    return () => {
+      offType()
+      offCancel()
+      window.clearTimeout(typingTimer.current)
+    }
+  }, [])
+
+  const forget = async () => {
+    await api.forget(sessionId)
+    setProfile(null)
+  }
+
   const retry = (t: Turn) => {
     if (!t.request || busy) return
-    patch(t.id, (x) => ({ ...x, text: '', activities: [], products: [], error: undefined, streaming: true, signal: undefined }))
+    patch(t.id, (x) => ({ ...x, text: '', activities: [], products: [], error: undefined, streaming: true, signal: undefined, memory: undefined, guardrail: null }))
     void run(t.request, t.id)
   }
 
@@ -313,6 +436,7 @@ export function ShopView({ initialPrompt, embedded = false, onConsumedPrompt }: 
             {onlineStore && <option value={onlineStore.store_id}>{onlineStore.name}</option>}
           </select>
         </label>
+        {memoryOn && profile && (profile.preferences.length > 0 || profile.summary) && <MemoryChip profile={profile} onForget={forget} />}
         <div className="relative">
           <button
             onClick={() => {
@@ -355,6 +479,7 @@ export function ShopView({ initialPrompt, embedded = false, onConsumedPrompt }: 
               onPrompt={(p) => send(p)}
               onSample={trySample}
               sampleBusy={sampleBusy}
+              voiceOn={voiceOn}
             />
           ) : (
             <div role="log" aria-live="polite" aria-relevant="additions text" aria-label="Conversation" className="flex flex-col gap-5">
@@ -390,6 +515,9 @@ export function ShopView({ initialPrompt, embedded = false, onConsumedPrompt }: 
               </button>
             </div>
           )}
+          {recording ? (
+            <RecorderBar seconds={recorder.seconds} levels={recorder.levels} onCancel={recorder.cancel} onSend={() => void finishVoice()} />
+          ) : (
           <div className="flex items-end gap-2">
             <input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp" capture="environment" className="sr-only" tabIndex={-1} aria-label="Upload a photo to search with" onChange={(e) => { void onFile(e.target.files?.[0]); e.target.value = '' }} />
             <button
@@ -414,15 +542,20 @@ export function ShopView({ initialPrompt, embedded = false, onConsumedPrompt }: 
               placeholder={attachment ? 'Add a size or budget' : 'Ask for an outfit or a gift…'}
               className="h-11 max-h-[140px] min-h-11 min-w-0 flex-1 resize-none rounded-[22px] border border-line-strong bg-bg px-4 py-2.5 text-[16px] leading-6 text-ink placeholder:text-ink-3 focus:border-ink-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-marigold/50"
             />
-            <button
-              type="submit"
-              disabled={busy || (!input.trim() && !attachment)}
-              className="grid size-11 shrink-0 place-items-center rounded-full bg-maroon text-on-maroon transition-opacity hover:bg-maroon-hover disabled:opacity-40"
-              aria-label="Send"
-            >
-              <ArrowUp className="size-5" aria-hidden />
-            </button>
+            {voiceOn && !input.trim() && !attachment ? (
+              <MicButton onClick={() => void recorder.start()} busy={busy || recorder.state === 'requesting'} />
+            ) : (
+              <button
+                type="submit"
+                disabled={busy || (!input.trim() && !attachment)}
+                className="grid size-11 shrink-0 place-items-center rounded-full bg-maroon text-on-maroon transition-opacity hover:bg-maroon-hover disabled:opacity-40"
+                aria-label="Send"
+              >
+                <ArrowUp className="size-5" aria-hidden />
+              </button>
+            )}
           </div>
+          )}
           <p className="mt-1.5 text-center text-[11px] text-ink-3">
             {input.length > MAX_LEN - 120 ? `${MAX_LEN - input.length} characters left. ` : ''}Demo data is synthetic. Nova Bazaar is a fictional retailer.
           </p>
@@ -438,12 +571,14 @@ function Welcome({
   onPrompt,
   onSample,
   sampleBusy,
+  voiceOn,
 }: {
   storeLabel: string
   prompts: string[]
   onPrompt: (p: string) => void
   onSample: () => void
   sampleBusy: boolean
+  voiceOn: boolean
 }) {
   return (
     <div className="anim-rise flex flex-col gap-5 pt-2 @[480px]:pt-8">
@@ -474,19 +609,49 @@ function Welcome({
         className="group flex items-center gap-3 self-start rounded-2xl border border-dashed border-line-strong bg-surface p-2 pr-4 text-left hover:border-maroon-ink disabled:opacity-60"
       >
         <span className="relative grid size-12 place-items-center overflow-hidden rounded-xl bg-surface-2">
-          <img src="/samples/blue-kurta.webp" alt="" className="size-full object-cover" onError={(e) => (e.currentTarget.style.display = 'none')} />
-          <ImagePlus className="absolute size-5 text-ink-3" aria-hidden />
+          <ImagePlus className="size-5 text-ink-3" aria-hidden />
+          <img src="/samples/blue-kurta.webp" alt="" className="absolute inset-0 size-full object-cover" onError={(e) => (e.currentTarget.style.display = 'none')} />
         </span>
         <span>
           <span className="block text-sm font-semibold text-ink">{sampleBusy ? 'Sending the photo…' : 'Try a sample photo'}</span>
           <span className="block text-xs text-ink-3">Search the catalog with a picture of a blue kurta</span>
         </span>
       </button>
+      {voiceOn && (
+        <p className="flex items-center gap-2 text-sm text-ink-2">
+          <span className="grid size-7 place-items-center rounded-full bg-maroon-soft text-maroon-ink">
+            <Mic className="size-3.5" aria-hidden />
+          </span>
+          Or tap the mic and speak in Tamil, Hindi or English.
+        </p>
+      )}
     </div>
   )
 }
 
 function UserBubble({ t }: { t: Turn }) {
+  if (t.voice) {
+    const lang = languageName(t.voice.language)
+    return (
+      <div className="anim-fade flex flex-col items-end gap-1">
+        <div className="max-w-[85%] rounded-2xl rounded-br-md bg-maroon px-3.5 py-2 text-on-maroon">
+          <p className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold text-white/85">
+            <span className="inline-flex items-center gap-1 rounded-full bg-white/15 px-1.5 py-0.5">
+              <Mic className="size-3" aria-hidden />
+              Voice note
+            </span>
+            <span className="num">{formatClock(t.voice.seconds)}</span>
+            {lang && <span>{lang}</span>}
+          </p>
+          {t.text ? (
+            <p className="text-[15px]">{t.text}</p>
+          ) : (
+            <p className="text-[15px] text-white/80">{t.voice.pending ? 'Transcribing…' : 'Voice note sent'}</p>
+          )}
+        </div>
+      </div>
+    )
+  }
   return (
     <div className="anim-fade flex flex-col items-end gap-1.5">
       {t.image && <img src={t.image} alt="Photo you sent" className="h-36 w-auto max-w-[70%] rounded-2xl rounded-br-md object-cover" />}
@@ -495,19 +660,119 @@ function UserBubble({ t }: { t: Turn }) {
   )
 }
 
+/** "maroon, silk, ≤₹5,000" from remembered preferences. */
+function preferenceText(prefs: Preference[]) {
+  return prefs
+    .map((p) => {
+      const k = p.key.toLowerCase()
+      const n = Number(String(p.value).replace(/[^0-9.]/g, ''))
+      if ((k.includes('budget') || k.includes('price')) && n > 0) return `≤${formatINR(n)}`
+      if (k.includes('store')) return storeName(p.value)
+      return p.value
+    })
+    .filter(Boolean)
+    .join(', ')
+}
+
+function MemoryChip({ profile, onForget }: { profile: Profile; onForget: () => Promise<void> }) {
+  const [open, setOpen] = useState(false)
+  const [confirm, setConfirm] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onDoc = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false)
+    const onKey = (e: globalThis.KeyboardEvent) => e.key === 'Escape' && setOpen(false)
+    document.addEventListener('mousedown', onDoc)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDoc)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => {
+          setOpen((o) => !o)
+          setConfirm(false)
+        }}
+        className="flex h-10 items-center gap-1.5 rounded-xl border border-marigold/60 bg-marigold-soft px-2.5 text-xs font-semibold text-marigold-ink hover:border-marigold"
+        aria-expanded={open}
+        aria-label="Nova remembers your preferences"
+      >
+        <Sparkles className="size-4" aria-hidden />
+        <span className="hidden @[420px]:inline">Nova remembers</span>
+      </button>
+      {open && (
+        <div role="dialog" aria-label="What Nova remembers" className="anim-fade absolute top-12 right-0 z-40 w-[min(86vw,320px)] rounded-2xl border border-line bg-surface p-3.5 shadow-float">
+          <p className="text-sm font-semibold text-ink">Nova remembers</p>
+          {profile.summary && <p className="mt-1 text-sm text-ink-2">{profile.summary}</p>}
+          {profile.preferences.length > 0 && (
+            <ul className="mt-2 flex flex-wrap gap-1.5">
+              {profile.preferences.map((p, i) => (
+                <li key={`${p.key}-${i}`} className="rounded-full bg-surface-2 px-2 py-0.5 text-xs text-ink-2">
+                  {preferenceText([p])}
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="mt-2 text-[11px] text-ink-3">Only shopping preferences are kept, never names or contact details.</p>
+          <div className="mt-3 border-t border-line pt-3">
+            {confirm ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="flex-1 text-xs text-ink-2">Forget all saved preferences?</span>
+                <button onClick={() => setConfirm(false)} className="rounded-lg px-2 py-1 text-xs font-semibold text-ink-2 hover:bg-surface-2">
+                  Cancel
+                </button>
+                <button
+                  onClick={async () => {
+                    setBusy(true)
+                    try {
+                      await onForget()
+                      setOpen(false)
+                    } finally {
+                      setBusy(false)
+                    }
+                  }}
+                  disabled={busy}
+                  className="rounded-lg bg-maroon px-2.5 py-1 text-xs font-semibold text-on-maroon disabled:opacity-60"
+                >
+                  {busy ? 'Forgetting…' : 'Forget me'}
+                </button>
+              </div>
+            ) : (
+              <button onClick={() => setConfirm(true)} className="text-xs font-semibold text-maroon-ink underline-offset-2 hover:underline">
+                Forget me
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function AssistantTurn({ t, onRetry, busy, alerts }: { t: Turn; onRetry: () => void; busy: boolean; alerts: Notification[] }) {
   const photo = Boolean(t.request?.image_base64)
-  const thinking = t.streaming && !t.text && !t.activities.length && !photo
-  // Photo turns take a while; show what is happening until the first real activity arrives.
+  const audio = Boolean(t.request?.audio_base64)
+  const thinking = t.streaming && !t.text && !t.activities.length && !photo && !audio
+  // Photo and voice turns take a while; show what is happening until the first real activity arrives.
   const activities: ActivityState[] =
-    photo && t.streaming && !t.text && !t.activities.length
-      ? [{ id: 'photo-pending', tool: 'photo', label: 'Looking at your photo', status: 'start' }]
+    (photo || audio) && t.streaming && !t.text && !t.activities.length
+      ? [{ id: 'media-pending', tool: 'media', label: audio ? 'Listening to your voice note' : 'Looking at your photo', status: 'start' }]
       : t.activities
   return (
     <div className="flex flex-col gap-2.5">
       <ActivityChips items={activities} />
       {photo && t.streaming && !t.text && (
         <p className="text-xs text-ink-3">Photo searches take about 10 seconds.</p>
+      )}
+      {t.memory && t.memory.preferences.length > 0 && (
+        <p className="anim-fade flex items-start gap-1.5 text-xs text-marigold-ink">
+          <Sparkles className="mt-px size-3.5 shrink-0" aria-hidden />
+          <span>Using what you told me earlier: {preferenceText(t.memory.preferences)}</span>
+        </p>
       )}
       {thinking && (
         <div className="flex items-center gap-1 py-1" aria-label="Concierge is thinking">
@@ -534,6 +799,12 @@ function AssistantTurn({ t, onRetry, busy, alerts }: { t: Turn; onRetry: () => v
             ))}
           </div>
         </div>
+      )}
+      {t.guardrail?.verdict === 'blocked' && (
+        <p className="anim-fade flex items-center gap-1.5 text-xs text-ink-3">
+          <ShieldCheck className="size-3.5 text-peacock" aria-hidden />
+          Protected by Model Armor
+        </p>
       )}
       {t.signal && <SignalNote s={t.signal} />}
       {t.error && (

@@ -47,7 +47,32 @@ export function RichText({ text, className }: { text: string; className?: string
   }
   for (const raw of lines) {
     const line = raw.trimEnd()
+    const heading = line.match(/^\s*(?:#{1,4}\s+(.+?)|\*\*([^*]+)\*\*:?)\s*$/)
+    if (heading) {
+      flushPara()
+      flushList()
+      const k = `h${blocks.length}`
+      blocks.push(
+        <p key={k} className="pt-1 text-[13px] font-semibold text-ink first:pt-0">
+          {heading[1] ?? heading[2]}
+        </p>,
+      )
+      continue
+    }
     const bullet = line.match(/^\s*(?:[-*•]|\d+[.)])\s+(.*)$/)
+    // A bullet that is only a bold label ("- **Top risks:**") reads better as a heading.
+    const labelOnly = bullet?.[1].match(/^\*\*([^*]+?):?\*\*:?\s*$/)
+    if (labelOnly) {
+      flushPara()
+      flushList()
+      const k = `h${blocks.length}`
+      blocks.push(
+        <p key={k} className="pt-1 text-[13px] font-semibold text-ink first:pt-0">
+          {labelOnly[1]}
+        </p>,
+      )
+      continue
+    }
     if (bullet) {
       flushPara()
       list.push(bullet[1])

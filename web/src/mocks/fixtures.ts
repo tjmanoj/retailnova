@@ -21,6 +21,7 @@ export const bootstrap: Bootstrap = {
   categories: CATEGORIES,
   sample_prompts: { shopper: SAMPLE_SHOPPER_PROMPTS, manager: SAMPLE_MANAGER_PROMPTS },
   reset_at: null,
+  features: { voice: true, store_assist: true, trends: true, model_armor: true, memory: 'firestore', guided_demo: true },
 }
 
 interface ProductSeed {
@@ -326,6 +327,13 @@ export function makeRadar(storeId: string, category: Category, liveUnmet = 0): R
         ],
     series,
     recent_signals: allSignals.slice(0, 20),
+    assortment_gaps: hero
+      ? [
+          { label: 'Red Banarasi silk sarees', category: 'sarees', asks_7d: 9, est_value_7d_inr: 9 * 7800, examples: ['Red Banarasi with gold buttis, around ₹8,000', 'Bridal Banarasi in red for a Diwali wedding'] },
+          { label: 'Paithani sarees', category: 'sarees', asks_7d: 5, est_value_7d_inr: 5 * 11500, examples: ['Peacock-motif Paithani in purple', 'Green Paithani with a traditional border'] },
+          { label: 'Organza sarees under ₹2,000', category: 'sarees', asks_7d: 4, est_value_7d_inr: 4 * 1900, examples: ['Pastel organza for a puja function'] },
+        ]
+      : [],
   }
 }
 
@@ -338,7 +346,28 @@ export function planSteps(storeId: string): { step: PlanStep; delayStart: number
     { step: { id: 'unmet_demand', label: 'Count unmet demand', status: 'done', summary: `31 unmet asks for maroon silk sarees at ${store} in 7 days, worth ₹1,48,769.` }, delayStart: 80, delayDone: 1700 },
     { step: { id: 'inventory', label: 'Check inventory position', status: 'done', summary: `SAR-001 is out at ${store}. RS Puram holds 14, Anna Nagar 3.` }, delayStart: 160, delayDone: 1100 },
     { step: { id: 'transfers', label: 'Find transfer options', status: 'done', summary: 'RS Puram can spare 12 units and keep 2. Road transfer takes 2 days.' }, delayStart: 240, delayDone: 2100 },
-    { step: { id: 'trends', label: 'Check festive trends', status: 'done', summary: 'Searches for maroon Kanchipuram silk are up ahead of Diwali in Tamil Nadu.' }, delayStart: 320, delayDone: 2500 },
+    {
+      step: {
+        id: 'trends',
+        label: 'Check festive trends',
+        status: 'done',
+        summary: 'Maroon and gold Kanchipuram silk is trending in Chennai ahead of Diwali.',
+        data: {
+          insights: [
+            'Kanchipuram silk in deep maroon and gold is a top Diwali pick in Chennai this year',
+            'Shoppers are buying earlier: festive saree demand peaks 10 to 14 days before Diwali',
+            'Temple-border and zari pallu designs lead search interest in Tamil Nadu',
+          ],
+          sources: [
+            { title: 'The Hindu: Festive silk buying in Chennai', url: 'https://www.thehindu.com/' },
+            { title: 'Economic Times Retail: Diwali apparel outlook', url: 'https://retail.economictimes.indiatimes.com/' },
+            { title: 'Google Trends: Kanchipuram saree', url: 'https://trends.google.com/' },
+          ],
+        },
+      },
+      delayStart: 320,
+      delayDone: 2500,
+    },
     { step: { id: 'planner', label: 'Draft the action plan', status: 'done', summary: '2 actions proposed, protecting ₹2,63,945 before Diwali.' }, delayStart: 2600, delayDone: 4100 },
   ]
 }
@@ -367,7 +396,7 @@ export function planProposals(planId: string, storeId: string): ActionProposal[]
         { kind: 'signals', text: '27 shoppers asked for this saree at T. Nagar in the last 7 days', value: 27 },
         { kind: 'forecast', text: 'Demand-sensed forecast: 19 units/day at the Diwali peak vs 13 from sales only', value: 19 },
         { kind: 'inventory', text: 'RS Puram: 14 on hand, sold 3 in the last 14 days', value: 14 },
-        { kind: 'trend', text: 'Maroon and gold Kanchipuram searches rising in Chennai', value: null },
+        { kind: 'trend', text: 'Maroon and gold Kanchipuram searches rising in Chennai', value: null, url: 'https://trends.google.com/' },
       ],
       confidence: 0.86,
       expected_revenue_protected_inr: 57588,

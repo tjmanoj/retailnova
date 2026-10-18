@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { BarChart3, MessageCircle, Smartphone, Sparkles } from 'lucide-react'
+import { BarChart3, MessageCircle, Play, Smartphone, Sparkles } from 'lucide-react'
 import { api } from '../lib/api'
-import { useBootstrap } from '../lib/bootstrap'
+import { useBootstrap, useFeatures } from '../lib/bootstrap'
 import { DiwaliChip, Footer } from '../components/AppHeader'
 import { Badge, cx } from '../components/ui'
 
 export default function Landing() {
   const boot = useBootstrap()
+  const features = useFeatures()
   const [health, setHealth] = useState<'warming' | 'ready' | 'offline'>('warming')
 
   useEffect(() => {
@@ -35,18 +36,38 @@ export default function Landing() {
               less. RetailNova captures every ask and plans stock around what customers actually wanted.
             </p>
             <div className="mt-8 flex flex-wrap items-center gap-3">
-              <Link
-                to="/live"
-                className="inline-flex h-12 items-center gap-2 rounded-xl bg-maroon px-5 text-[15px] font-semibold text-on-maroon hover:bg-maroon-hover"
-              >
-                Open the live loop
-              </Link>
-              <Link
-                to="/shop"
-                className="inline-flex h-12 items-center gap-2 rounded-xl border border-line-strong bg-surface px-5 text-[15px] font-semibold text-ink hover:bg-surface-2"
-              >
-                Shop as Priya
-              </Link>
+              {features.guided_demo ? (
+                <>
+                  <Link
+                    to="/live?demo=1"
+                    className="inline-flex h-12 items-center gap-2 rounded-xl bg-maroon px-5 text-[15px] font-semibold text-on-maroon hover:bg-maroon-hover"
+                  >
+                    <Play className="size-4" aria-hidden />
+                    Play 60-second guided demo
+                  </Link>
+                  <Link
+                    to="/live"
+                    className="inline-flex h-12 items-center gap-2 rounded-xl border border-line-strong bg-surface px-5 text-[15px] font-semibold text-ink hover:bg-surface-2"
+                  >
+                    Open the live loop
+                  </Link>
+                </>
+              ) : (
+                <>
+                  <Link
+                    to="/live"
+                    className="inline-flex h-12 items-center gap-2 rounded-xl bg-maroon px-5 text-[15px] font-semibold text-on-maroon hover:bg-maroon-hover"
+                  >
+                    Open the live loop
+                  </Link>
+                  <Link
+                    to="/shop"
+                    className="inline-flex h-12 items-center gap-2 rounded-xl border border-line-strong bg-surface px-5 text-[15px] font-semibold text-ink hover:bg-surface-2"
+                  >
+                    Shop as Priya
+                  </Link>
+                </>
+              )}
               <span className="flex items-center gap-1.5 text-xs text-ink-3" role="status">
                 <span
                   className={cx(
@@ -74,15 +95,19 @@ export default function Landing() {
             {[
               {
                 t: 'Ask as Priya',
-                d: 'Ask for a maroon Kanchipuram silk saree at T. Nagar. It is sold out there, so tap Notify me.',
+                d: features.voice
+                  ? 'Ask for a maroon Kanchipuram silk saree at T. Nagar, typed or as a voice note in Tamil, Hindi or English. It is sold out there, so tap Notify me.'
+                  : 'Ask for a maroon Kanchipuram silk saree at T. Nagar. It is sold out there, so tap Notify me.',
               },
               {
                 t: 'Watch the radar',
-                d: "Your ask lands in Arjun's live feed as unmet demand, next to forecasts built with and without it.",
+                d: features.store_assist
+                  ? "Your ask lands in Arjun's live feed as unmet demand. Walk-in requests logged at the counter join the same feed."
+                  : "Your ask lands in Arjun's live feed as unmet demand, next to forecasts built with and without it.",
               },
               {
                 t: 'Approve the plan',
-                d: 'Generate the Diwali action plan, approve the transfer, and Priya gets "Reserved for you at T. Nagar".',
+                d: 'Read the morning brief, generate the Diwali plan and approve the transfer. Priya gets "Reserved for you at T. Nagar" with a pickup pass.',
               },
             ].map((s, i) => (
               <li key={s.t} className={cx('relative flex gap-4 md:block md:px-6', i === 0 && 'md:pl-0', i > 0 && 'md:border-l md:border-line')}>
@@ -128,14 +153,18 @@ export default function Landing() {
               icon={<Smartphone className="size-6 text-maroon-ink" aria-hidden />}
               title="Shopper"
               who="Priya, shopping in Chennai"
-              body="Chat or send a photo. See real stock at every store, then reserve or get notified."
+              body={
+                features.voice
+                  ? 'Chat, send a photo or a voice note. See real stock at every store, then reserve with a pickup pass or get notified.'
+                  : 'Chat or send a photo. See real stock at every store, then reserve or get notified.'
+              }
             />
             <EntryCard
               to="/manager"
               icon={<BarChart3 className="size-6 text-maroon-ink" aria-hidden />}
               title="Store manager"
               who="Arjun, T. Nagar"
-              body="Demand radar, two TimesFM forecasts and an ops copilot that proposes transfers you approve."
+              body="Demand radar, two TimesFM forecasts, a morning brief and an ops copilot that proposes transfers you approve."
             />
           </div>
         </section>

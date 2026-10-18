@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { BarChart3, Check, Smartphone } from 'lucide-react'
+import { BarChart3, Check, Play, Smartphone } from 'lucide-react'
 import { ShopView } from '../features/shop/ShopView'
 import { ManagerView } from '../features/manager/ManagerView'
 import { on, type LoopStep } from '../lib/bus'
 import { cx } from '../components/ui'
+import { useFeatures } from '../lib/bootstrap'
+import { DemoCaptionBar, useGuidedDemo } from '../features/demo/GuidedDemo'
 
 const STEPS: { key: LoopStep; title: string; short: string; who: string }[] = [
   { key: 'ask', title: 'Ask', short: 'Ask', who: 'Priya asks the concierge' },
@@ -44,11 +46,11 @@ function useLoopProgress() {
   return { reached, last }
 }
 
-function LoopStrip({ reached, last }: { reached: Set<LoopStep>; last: LoopStep | null }) {
+function LoopStrip({ reached, last, onPlay, playing }: { reached: Set<LoopStep>; last: LoopStep | null; onPlay?: () => void; playing?: boolean }) {
   const notified = reached.has('notify')
   return (
-    <nav aria-label="The demand loop" className="border-b border-line bg-surface">
-      <ol className="no-scrollbar relative mx-auto flex max-w-[1440px] items-stretch gap-1 overflow-x-auto px-2 py-2 sm:px-6" aria-live="polite">
+    <nav aria-label="The demand loop" className="flex items-center border-b border-line bg-surface">
+      <ol className="no-scrollbar relative mx-auto flex max-w-[1440px] min-w-0 flex-1 items-stretch gap-1 overflow-x-auto px-2 py-2 sm:px-6" aria-live="polite">
         {STEPS.map((s, i) => {
           const on = reached.has(s.key)
           const current = last === s.key || (s.key === 'approve' && last === 'notify')
@@ -57,21 +59,21 @@ function LoopStrip({ reached, last }: { reached: Set<LoopStep>; last: LoopStep |
             <li key={s.key} className="flex min-w-0 flex-1 items-center gap-2">
               <div
                 className={cx(
-                  'flex min-w-0 flex-1 items-center gap-1.5 rounded-xl px-1.5 py-1.5 transition-colors duration-500 sm:min-w-[150px] sm:gap-2.5 sm:px-2.5',
+                  'flex min-w-0 flex-1 items-center gap-1 rounded-xl px-1 py-1.5 transition-colors duration-500 sm:min-w-[150px] sm:gap-2.5 sm:px-2.5',
                   on ? 'bg-marigold-soft' : 'bg-transparent',
                   current && 'ring-1 ring-marigold',
                 )}
               >
                 <span
                   className={cx(
-                    'grid size-6 shrink-0 place-items-center rounded-full text-xs font-bold transition-colors duration-500',
+                    'grid size-5 shrink-0 place-items-center rounded-full text-[11px] font-bold transition-colors duration-500 sm:size-6 sm:text-xs',
                     done ? 'bg-maroon text-on-maroon' : on ? 'bg-marigold text-[#3b2400]' : 'bg-surface-2 text-ink-3',
                   )}
                 >
                   {done ? <Check className="size-3.5" strokeWidth={3} aria-hidden /> : i + 1}
                 </span>
                 <span className="min-w-0 leading-tight">
-                  <span className={cx('block text-[13px] font-semibold sm:text-sm', on ? 'text-ink' : 'text-ink-2')}>
+                  <span className={cx('block truncate text-[12px] font-semibold sm:text-sm', on ? 'text-ink' : 'text-ink-2')}>
                     <span className="sm:hidden">{s.short}</span>
                     <span className="hidden sm:inline">{s.title}</span>
                   </span>
@@ -84,6 +86,17 @@ function LoopStrip({ reached, last }: { reached: Set<LoopStep>; last: LoopStep |
           )
         })}
       </ol>
+      {onPlay && (
+        <button
+          onClick={onPlay}
+          disabled={playing}
+          aria-label={playing ? 'Guided demo playing' : 'Play guided demo'}
+          className="mr-2 grid size-9 shrink-0 place-items-center rounded-xl bg-maroon text-on-maroon hover:bg-maroon-hover disabled:opacity-60 sm:mr-6 sm:flex sm:h-9 sm:w-auto sm:gap-1.5 sm:px-3 sm:text-sm sm:font-semibold"
+        >
+          <Play className="size-4 sm:size-3.5" aria-hidden />
+          <span className="hidden sm:inline">{playing ? 'Playing…' : 'Play guided demo'}</span>
+        </button>
+      )}
     </nav>
   )
 }
@@ -120,6 +133,31 @@ export default function LivePage() {
   const [tab, setTab] = useState<'shop' | 'manager'>('shop')
   const [managerDot, setManagerDot] = useState(false)
   const [shopDot, setShopDot] = useState(false)
+  const features = useFeatures()
+  const demo = useGuidedDemo()
+  const autoDemo = useRef(params.get('demo') === '1')
+
+  useEffect(() => on('demoTab', (t) => setTab(t)), [])
+  // /live?demo=1 starts the guided demo once the feature flags have loaded. A short timer keeps
+  // it to a single start even when effects mount twice in development.
+  const startRef = useRef(demo.start)
+  startRef.current = demo.start
+  useEffect(() => {
+    if (!autoDemo.current || !features.guided_demo) return
+    const t = window.setTimeout(() => {
+      autoDemo.current = false
+      setParams(
+        (prev) => {
+          const next = new URLSearchParams(prev)
+          next.delete('demo')
+          return next
+        },
+        { replace: true },
+      )
+      void startRef.current()
+    }, 400)
+    return () => window.clearTimeout(t)
+  }, [features.guided_demo, setParams])
 
   useEffect(() => {
     const off = on('signal', () => {
@@ -147,7 +185,8 @@ export default function LivePage() {
   return (
     <main id="main" className="flex min-h-0 flex-1 flex-col">
       <h1 className="sr-only">Live loop: shopper and store manager side by side</h1>
-      <LoopStrip reached={reached} last={last} />
+      <LoopStrip reached={reached} last={last} onPlay={features.guided_demo ? () => void demo.start() : undefined} playing={demo.running} />
+      {demo.caption && <DemoCaptionBar caption={demo.caption} running={demo.running} onStop={() => demo.stop()} onReplay={() => void demo.start()} wide={wide} />}
       {wide ? (
         <div className="mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 gap-0 px-6 py-5">
           <section aria-label="Shopper, Priya" className="flex min-h-0 flex-col items-center">

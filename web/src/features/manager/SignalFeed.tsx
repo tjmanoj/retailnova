@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Camera, MessageCircle, Store as StoreIcon, Radio } from 'lucide-react'
+import { Camera, MessageCircle, Mic, Store as StoreIcon, Radio } from 'lucide-react'
 import type { DemandSignal } from '../../types'
 import { useSignals } from '../../lib/realtime'
 import { formatINR, relativeTime } from '../../lib/format'
@@ -9,7 +9,8 @@ import { Badge, Skeleton, cx } from '../../components/ui'
 const CHANNEL = {
   chat: { Icon: MessageCircle, label: 'Chat' },
   image_search: { Icon: Camera, label: 'Photo search' },
-  store_assist: { Icon: StoreIcon, label: 'In store' },
+  store_assist: { Icon: StoreIcon, label: 'Store assist' },
+  voice: { Icon: Mic, label: 'Voice note' },
 } as const
 
 const REASON: Record<string, string> = {
@@ -100,7 +101,21 @@ export function SignalFeed({ storeId, seed, maxHeight = 520, className }: { stor
                     </div>
                     <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-3">
                       <OutcomeBadge s={s} />
-                      {s.source === 'live' && <Badge tone="peacock">Live chat</Badge>}
+                      {s.channel === 'store_assist' ? (
+                        <Badge tone="neutral" icon={<StoreIcon className="size-3" aria-hidden />}>
+                          Store assist
+                        </Badge>
+                      ) : s.channel === 'voice' ? (
+                        <Badge tone="peacock" icon={<Mic className="size-3" aria-hidden />}>
+                          Voice note
+                        </Badge>
+                      ) : s.channel === 'image_search' && s.source === 'live' ? (
+                        <Badge tone="peacock" icon={<Camera className="size-3" aria-hidden />}>
+                          Photo search
+                        </Badge>
+                      ) : (
+                        s.source === 'live' && <Badge tone="peacock">Live chat</Badge>
+                      )}
                       {s.sku && <span className="num">{s.sku}</span>}
                       <time dateTime={s.ts}>{relativeTime(s.ts, now)}</time>
                     </div>
