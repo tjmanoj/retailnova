@@ -34,7 +34,7 @@ Chapters
 2:51 Model Armor and architecture
 3:16 Measured results and try it
 
-Team RetailNova (Manoj T, Suvetha) · AI Builder Cup 2026 · Retail & Commerce: Intelligent Customer and Business Experiences
+Team RetailNova (Suvetha S, Manoj T) · AI Builder Cup 2026 · Retail & Commerce: Intelligent Customer and Business Experiences
 All demo data is synthetic; Nova Bazaar is a fictional retailer.
 
 #AIBuilderCup #GoogleCloud #Gemini #RetailAI #AgenticAI

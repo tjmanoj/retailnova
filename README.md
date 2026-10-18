@@ -1,6 +1,6 @@
 # RetailNova: every conversation is a demand signal
 
-**AI Builder Cup 2026 · Retail & Commerce: Intelligent Customer and Business Experiences · Team RetailNova (Manoj T, Suvetha)**
+**AI Builder Cup 2026 · Retail & Commerce: Intelligent Customer and Business Experiences · Team RetailNova (Suvetha S, Manoj T)**
 
 | | |
 |---|---|

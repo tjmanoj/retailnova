@@ -223,7 +223,7 @@ def build(template: Path, links: dict):
     cover = s[0]
     for shp in cover.shapes:
         if shp.has_text_frame and "Team Details" in shp.text_frame.text:
-            values = {"Team name": "RetailNova", "Team leader name": "Manoj T",
+            values = {"Team name": "RetailNova", "Team leader name": "Suvetha S",
                       "Problem Statement": "Retail & Commerce: Intelligent Customer and Business Experiences"}
             for p in shp.text_frame.paragraphs:
                 for r_ in p.runs:
@@ -239,7 +239,7 @@ def build(template: Path, links: dict):
         ("Every conversation is a demand signal.", {"size": 13, "bold": True, "color": INK, "space_after": 6}),
         ("Gemini agents on Google Cloud that turn what shoppers ask for into what stores stock.",
          {"size": 10.5, "color": MUTED}),
-        ("Team: Manoj T · Suvetha", {"size": 9.5, "color": MUTED}),
+        ("Team: Suvetha S (lead) · Manoj T", {"size": 9.5, "color": MUTED}),
     ])
 
     # 2. Brief about the idea
