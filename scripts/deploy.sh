@@ -24,9 +24,9 @@ deploy_backend() {
   gcloud run deploy "$SERVICE" \
     --image="$IMAGE" --region="$REGION" --project "$PROJECT" \
     --service-account="$SA" --allow-unauthenticated \
-    --cpu=1 --memory=1Gi --concurrency=40 --max-instances=5 --min-instances=0 \
+    --cpu=1 --memory=1Gi --concurrency=40 --max-instances=5 --min-instances=1 \
     --timeout=300 --cpu-boost --session-affinity \
-    --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT},GOOGLE_CLOUD_LOCATION=global,GOOGLE_GENAI_USE_VERTEXAI=TRUE,BQ_DATASET=${BQ_DATASET},DEMO_TODAY=2026-10-18" \
+    --set-env-vars="^@^GOOGLE_CLOUD_PROJECT=${PROJECT}@GOOGLE_CLOUD_LOCATION=global@GOOGLE_GENAI_USE_VERTEXAI=TRUE@BQ_DATASET=${BQ_DATASET}@DEMO_TODAY=2026-10-18@ALLOWED_ORIGINS=https://${PROJECT}.web.app,https://${PROJECT}.firebaseapp.com,http://localhost:5173" \
     --quiet
 }
 
