@@ -264,7 +264,7 @@ def build(template: Path, links: dict):
         text(sl, cx + 0.05, Y0 + 3.2, 1.35, 0.25, [(src, {"size": 7, "color": MUTED, "italic": True})])
     rect(sl, 5.05, Y0, 4.63, 3.5, fill=WHITE, line=LINE)
     text(sl, 5.2, Y0 + 0.08, 4.4, 0.32, [("RetailNova closes the loop", {"bold": True, "size": 13, "color": GREEN})])
-    loop = [("Ask", "Shoppers chat in their language (English, Hinglish, Tamil) or send a photo."),
+    loop = [("Ask", "Shoppers ask in their language by text, photo or voice note; staff log walk-in requests."),
             ("Serve", "A Gemini concierge answers only from the real catalog and live stock in every store."),
             ("Sense", "Each conversation becomes a structured demand signal: what, where, price, and why it was unmet."),
             ("Plan", "BigQuery TimesFM forecasts plus signals → an agent proposes transfers and reorders, with evidence."),
@@ -303,14 +303,14 @@ def build(template: Path, links: dict):
     sl = s[3]
     set_title(sl, "List of features offered by the solution")
     feats = [
-        ("Multilingual concierge", "English, Hinglish, Tamil. Grounded in catalog + live stock; never invents products or prices."),
-        ("Visual search", "Send a photo and find similar items, using Gemini vision with Firestore vector search."),
-        ("Omnichannel availability", "Stock across 6 stores + online. Reserve for pickup or tap “Notify me”."),
-        ("Live demand signals", "Every chat becomes a signal: category, attributes, price band, outcome, reason."),
-        ("Demand Radar", "Unmet demand vs two TimesFM forecasts: sales-only and demand-sensed."),
-        ("Agentic action plan", "Parallel data steps → transfers and reorders with evidence, confidence and ₹ impact."),
-        ("Approve → notify", "One click updates inventory and notifies every waiting shopper. The loop closes."),
-        ("Guardrails", "Server-side grounding check, injection refusal, rate limits, no personal data, synthetic labels."),
+        ("Multilingual concierge", "Text, photo or voice note in Tamil, Hindi or English. Grounded in catalog + live stock; never invents products or prices."),
+        ("Nova remembers you", "Agent Platform Memory Bank recalls taste and budget across visits. One-tap “Forget me”."),
+        ("Omnichannel availability", "Stock across 6 stores + online. Reserve with a QR pickup pass or tap “Notify me”."),
+        ("Every ask is a signal", "Chats, voice notes, photos and walk-in requests logged by staff become structured demand signals."),
+        ("Demand Radar", "Sales-only vs demand-sensed TimesFM forecasts, assortment gaps and revenue protected."),
+        ("Agentic action plan", "Parallel steps incl. live Google Search market trends → transfers and reorders with evidence."),
+        ("Approve → notify", "One click moves stock and notifies waiting shoppers. Morning brief for the manager."),
+        ("Guardrails", "Model Armor screens every prompt; server-side grounding; rate limits; no personal data."),
     ]
     for i, (t, b) in enumerate(feats):
         cx, cy = X0 + (i % 4) * 2.35, Y0 + 0.05 + (i // 4) * 2.02
@@ -319,10 +319,10 @@ def build(template: Path, links: dict):
     # 5. Process flow
     sl = s[4]
     set_title(sl, "Process flow diagram")
-    steps = [("1 · Shopper asks", "Text, Hinglish/Tamil or a photo"),
-             ("2 · Concierge", "Gemini 3.6 Flash + tools: vector search, stock, reserve, notify"),
+    steps = [("1 · Shopper asks", "Text, photo or voice note in any language; staff log walk-ins"),
+             ("2 · Concierge", "Model Armor check → Gemini 3.6 Flash + tools: vector search, stock, memory"),
              ("3 · Signal", "Flash-Lite extracts a DemandSignal → Firestore (live)"),
-             ("4 · Plan", "TimesFM forecasts + signals + inventory → ActionProposals"),
+             ("4 · Plan", "TimesFM + signals + inventory + Google Search trends → proposals"),
              ("5 · Approve", "Manager approves → inventory moves → shopper notified")]
     bw, gap = 1.7, 0.215
     for i, (t, b) in enumerate(steps):
@@ -362,17 +362,19 @@ def build(template: Path, links: dict):
     sl = s[7]
     set_title(sl, "Technologies used in the solution")
     rows = [["Google service", "Used for"],
-            ["Gemini 3.6 Flash (Agent Platform)", "Concierge reasoning + tool calling, vision, multilingual chat, ops planning, manager Q&A"],
-            ["Gemini 3.5 Flash-Lite", "Structured DemandSignal extraction (JSON schema); fallback model"],
-            ["Gemini Embedding 2", "768-dim product vectors for semantic + image-to-catalog search"],
-            ["Gemini 3.1 Flash Image", "Generated the consistent catalog photo set"],
-            ["Agent Development Kit (ADK)", "Agents, tools, sessions, streamed events"],
-            ["Cloud Run", "Serverless agent API (FastAPI); autoscaling, scale to zero, keyless service identity"],
-            ["Firebase Hosting", "Global CDN for the UI; same-origin rewrite of /api to Cloud Run"],
+            ["Gemini 3.6 Flash (Agent Platform)", "Concierge reasoning + tool calling, voice-note and image understanding, multilingual chat, ops planning, morning brief"],
+            ["Gemini 3.5 Flash-Lite", "Structured DemandSignal extraction (JSON schema); hedged fallback model"],
+            ["Google Search grounding", "Live festive market trends with cited sources inside the action plan"],
+            ["Agent Platform Memory Bank", "Remembers shopper preferences across visits (preferences only); “Forget me”"],
+            ["Model Armor", "Screens every prompt for injection, jailbreak and harmful content before tools run"],
+            ["Gemini Embedding 2 · Gemini 3.1 Flash Image", "768-dim vectors for semantic + photo search; generated the catalog photo set"],
+            ["Agent Development Kit (ADK)", "Agents, function tools, sessions, streamed events"],
+            ["Cloud Run", "Serverless agent API (FastAPI); autoscaling, keyless service identity"],
+            ["Firebase Hosting", "Global CDN for the UI (installable PWA); /api rewrite to Cloud Run"],
             ["Firestore", "Catalog, inventory, signals, plans; vector search; real-time listeners in the UI"],
             ["BigQuery + AI.FORECAST (TimesFM)", "2-year sales history; forecasts with no model training; backtest analytics"],
-            ["Cloud Build · Artifact Registry · Logging · Monitoring", "Builds, deploys, structured logs, uptime check, budget alerts"]]
-    table(sl, X0, Y0, W, rows, [3.1, 6.26], size=9, row_h=0.36)
+            ["Cloud Trace · Monitoring · Scheduler · Build", "Spans per agent/tool call, uptime alerts, nightly demo reset, container builds"]]
+    table(sl, X0, Y0 - 0.05, W, rows, [3.1, 6.26], size=8.5, row_h=0.315)
 
     # 9. Estimated cost
     sl = s[8]
@@ -437,8 +439,8 @@ def build(template: Path, links: dict):
     sl = s[11]
     set_title(sl, "Additional details / future development")
     card(sl, X0, Y0 + 0.05, 4.6, 3.95, "Roadmap", [
-        "Voice shopping with Gemini Live in regional languages",
-        "Shopper memory with Agent Platform Memory Bank (consented)",
+        "Real-time voice conversations with Gemini Live in regional languages",
+        "Personalised festive offers from remembered preferences (consented)",
         "Checkout via the Universal Commerce Protocol",
         "Agent-to-agent supplier negotiation for reorders",
         "WhatsApp channel and in-store associate app (store-assist signals)",
@@ -498,21 +500,26 @@ def build(template: Path, links: dict):
 
 
 def draw_architecture(sl):
-    """Fallback architecture diagram drawn with native shapes."""
-    def node(x, y, w, h, title, sub, accent):
-        card(sl, x, y, w, h, title, sub, accent=accent, title_size=10, body_size=8.5)
-    node(X0, Y0 + 1.4, 1.65, 1.2, "Users", "Shoppers · managers · judges (browser, phone)", MUTED)
-    node(X0 + 2.0, Y0 + 1.4, 1.9, 1.2, "Firebase Hosting", "React UI on CDN; /api → Cloud Run; Firestore live listeners", MARIGOLD)
-    node(X0 + 4.25, Y0 + 0.75, 2.45, 2.5, "Cloud Run · ADK agents", [
-        "Concierge: Gemini 3.6 Flash", "Signal extractor: Flash-Lite", "Ops planner: fan-out → Gemini", "Manager Q&A"], MAROON)
-    node(X0 + 7.05, Y0 + 0.0, 2.3, 1.15, "Gemini on Agent Platform", "3.6 Flash · Flash-Lite · Embedding 2", GREEN)
-    node(X0 + 7.05, Y0 + 1.42, 2.3, 1.15, "Firestore", "Catalog + vectors, inventory, signals, plans, notifications", MARIGOLD)
-    node(X0 + 7.05, Y0 + 2.84, 2.3, 1.2, "BigQuery", "Sales history · AI.FORECAST (TimesFM) · backtest", GREEN)
-    arrow(sl, X0 + 1.67, Y0 + 2.0, X0 + 1.98, Y0 + 2.0)
-    arrow(sl, X0 + 3.92, Y0 + 2.0, X0 + 4.23, Y0 + 2.0)
-    arrow(sl, X0 + 6.72, Y0 + 1.3, X0 + 7.03, Y0 + 0.6)
-    arrow(sl, X0 + 6.72, Y0 + 2.0, X0 + 7.03, Y0 + 2.0)
-    arrow(sl, X0 + 6.72, Y0 + 2.7, X0 + 7.03, Y0 + 3.4)
+    """Architecture diagram drawn with native shapes."""
+    def node(x, y, w, h, title, sub, accent, ts=10, bs=8.5):
+        card(sl, x, y, w, h, title, sub, accent=accent, title_size=ts, body_size=bs)
+    node(X0, Y0 + 0.75, 1.55, 1.15, "Users", "Shoppers · staff · managers · judges (browser, phone, PWA)", MUTED)
+    node(X0 + 1.85, Y0 + 0.75, 1.85, 1.15, "Firebase Hosting", "React UI on CDN; /api → Cloud Run; Firestore live listeners", MARIGOLD)
+    node(X0 + 4.0, Y0 + 0.3, 2.45, 2.05, "Cloud Run · ADK agents", [
+        "Concierge (text · photo · voice)", "Signal extractor · Store assist", "Ops planner: parallel steps → Gemini", "Manager Q&A · morning brief"], MAROON)
+    node(X0 + 6.8, Y0 + 0.0, 2.55, 0.95, "Gemini on Agent Platform", "3.6 Flash · Flash-Lite · Embedding 2", GREEN)
+    node(X0 + 6.8, Y0 + 1.05, 2.55, 0.95, "Firestore", "Catalog + vectors, inventory, signals, plans", MARIGOLD)
+    node(X0 + 6.8, Y0 + 2.1, 2.55, 0.95, "BigQuery", "Sales history · AI.FORECAST (TimesFM)", GREEN)
+    bottom = [("Model Armor", "Prompt screening", MAROON), ("Memory Bank", "Shopper preferences", GREEN),
+              ("Google Search", "Trend grounding", MARIGOLD), ("Trace · Monitoring", "Spans, uptime, budget", MUTED)]
+    for i, (t, b_, c) in enumerate(bottom):
+        node(X0 + 1.85 + i * 1.9, Y0 + 3.2, 1.78, 0.85, t, b_, c, ts=9.5, bs=8)
+    arrow(sl, X0 + 1.57, Y0 + 1.32, X0 + 1.83, Y0 + 1.32)
+    arrow(sl, X0 + 3.72, Y0 + 1.32, X0 + 3.98, Y0 + 1.32)
+    arrow(sl, X0 + 6.47, Y0 + 0.8, X0 + 6.78, Y0 + 0.45)
+    arrow(sl, X0 + 6.47, Y0 + 1.4, X0 + 6.78, Y0 + 1.5)
+    arrow(sl, X0 + 6.47, Y0 + 2.0, X0 + 6.78, Y0 + 2.55)
+    arrow(sl, X0 + 5.2, Y0 + 2.37, X0 + 5.2, Y0 + 3.18)
 
 
 if __name__ == "__main__":

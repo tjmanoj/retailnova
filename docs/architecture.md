@@ -70,3 +70,13 @@
 - **Signals:** Pub/Sub for high-volume ingestion, with Firestore aggregates per store.
 - **Agents:** Agent Runtime and Memory Bank for long-running agents and shopper memory.
 - **Cost:** measured per 1,000 conversations from real token usage (see `evals/RESULTS.md`).
+
+## v1.1 additions
+| Capability | How it works |
+|---|---|
+| **Voice notes** | The browser records audio; Gemini 3.6 Flash transcribes it inline (any Indian language) and emits a `transcript` event; the concierge then runs on the transcript. Signal channel `voice`. |
+| **Store assist** | Staff log a walk-in request by text or voice through `POST /api/assist`. Model Armor screens it, then catalog search and the extractor produce a `store_assist` signal, checked against that store's stock. Items the store doesn't carry become assortment gaps. |
+| **Market trends** | The ops plan's `trends` step asks Gemini with the `google_search` tool (10 s timeout, 60-minute cache per city and category). Insights and source links feed into proposal evidence. |
+| **Model Armor** | The `retailnova-shield` template (asia-south1) screens chat, ask and assist text before any tool runs. A block returns a polite refusal; on any error it fails open. |
+| **Memory Bank** | Agent Platform Memory Bank (`retailnova-memory` engine) stores shopping preferences per shopper (browser id). They are recalled at the start of each turn (1.6 s cap) and written after the reply. `/api/profile` shows them and `/api/profile/forget` deletes them. |
+| **Observability** | OpenTelemetry → Cloud Trace spans for requests, Model Armor, transcription and trends (alongside ADK's agent, model and tool spans). Logs carry the trace id. Uptime checks and budget alerts are in place. Cloud Scheduler resets the demo nightly. |
