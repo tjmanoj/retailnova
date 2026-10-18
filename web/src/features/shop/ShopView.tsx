@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
-import { ArrowUp, Bell, BellRing, Camera, ImagePlus, MapPin, Mic, PackageCheck, RefreshCw, ShieldCheck, Sparkles, Store as StoreIcon, Truck, X } from 'lucide-react'
+import { ArrowUp, Bell, BellRing, Camera, ImagePlus, MapPin, MessageSquarePlus, Mic, PackageCheck, RefreshCw, ShieldCheck, Sparkles, Store as StoreIcon, Truck, X } from 'lucide-react'
 import type { ChatRequest, DemandSignal, Guardrail, MemoryEvent, Notification, Preference, Profile, ProductCard as Product } from '../../types'
 import { api } from '../../lib/api'
 import { getSessionId } from '../../lib/session'
@@ -91,6 +91,14 @@ export function ShopView({ initialPrompt, embedded = false, onConsumedPrompt }: 
   const textarea = useRef<HTMLTextAreaElement>(null)
   const abortRef = useRef<AbortController | null>(null)
   const consumed = useRef(false)
+  // The first message after a page load, a reset or "New chat" starts a fresh conversation
+  // on the server (history dropped, remembered preferences kept).
+  const freshChat = useRef(true)
+  const takeFresh = () => {
+    const f = freshChat.current
+    freshChat.current = false
+    return f ? { new_chat: true } : {}
+  }
 
   const features = useFeatures()
   const voiceOn = features.voice && voiceSupported()
@@ -143,6 +151,7 @@ export function ShopView({ initialPrompt, embedded = false, onConsumedPrompt }: 
     () =>
       on('reset', () => {
         abortRef.current?.abort()
+        freshChat.current = true
         setTurns([])
         setBusy(false)
         setUnread(0)
@@ -267,6 +276,7 @@ export function ShopView({ initialPrompt, embedded = false, onConsumedPrompt }: 
         store_id: storeId,
         language_hint: 'auto',
         ...(att ? { image_base64: att.base64, image_mime: att.mime } : {}),
+        ...takeFresh(),
       }
       const userTurn: Turn = { id: tid(), role: 'user', text: message, image: att?.dataUrl, activities: [], products: [] }
       const asst: Turn = { id: tid(), role: 'assistant', text: '', activities: [], products: [], streaming: true, request: req, userId: userTurn.id }
@@ -288,6 +298,7 @@ export function ShopView({ initialPrompt, embedded = false, onConsumedPrompt }: 
         language_hint: 'auto',
         audio_base64: rec.base64,
         audio_mime: rec.mime,
+        ...takeFresh(),
       }
       const userTurn: Turn = { id: tid(), role: 'user', text: '', voice: { seconds: rec.seconds, pending: true }, activities: [], products: [] }
       const asst: Turn = { id: tid(), role: 'assistant', text: '', activities: [], products: [], streaming: true, request: req, userId: userTurn.id }
@@ -339,6 +350,19 @@ export function ShopView({ initialPrompt, embedded = false, onConsumedPrompt }: 
       window.clearTimeout(typingTimer.current)
     }
   }, [])
+
+  const newChat = useCallback(() => {
+    abortRef.current?.abort()
+    freshChat.current = true
+    setTurns([])
+    setBusy(false)
+    setInput('')
+    setAttachment(null)
+    setBanner(null)
+    setNotice(null)
+    textarea.current?.focus()
+  }, [])
+  useEffect(() => on('newChat', newChat), [newChat])
 
   const forget = async () => {
     await api.forget(sessionId)
@@ -437,6 +461,17 @@ export function ShopView({ initialPrompt, embedded = false, onConsumedPrompt }: 
           </select>
         </label>
         {memoryOn && profile && (profile.preferences.length > 0 || profile.summary) && <MemoryChip profile={profile} onForget={forget} />}
+        <button
+          type="button"
+          onClick={newChat}
+          disabled={turns.length === 0}
+          className="flex h-10 shrink-0 items-center gap-1.5 rounded-xl border border-line px-2.5 text-xs font-semibold text-ink-2 hover:bg-surface-2 hover:text-ink disabled:opacity-50"
+          aria-label="New chat"
+          title="Start a new chat. Nova keeps what it remembers about your preferences."
+        >
+          <MessageSquarePlus className="size-4" aria-hidden />
+          <span className="hidden @[340px]:inline">New chat</span>
+        </button>
         <div className="relative">
           <button
             onClick={() => {

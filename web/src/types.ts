@@ -215,6 +215,7 @@ export interface ChatRequest {
   audio_base64?: string // §9.2
   audio_mime?: AudioMime
   language_hint?: 'auto' | 'en' | 'hi' | 'ta'
+  new_chat?: boolean // §9.9: drop conversation history, keep remembered preferences
 }
 
 export type AudioMime = 'audio/webm' | 'audio/ogg' | 'audio/mp4' | 'audio/mpeg' | 'audio/wav'

@@ -86,6 +86,7 @@ export function useGuidedDemo() {
         /* keep going with the current state */
       }
       emit('reset', null)
+      emit('newChat', null)
       reached.current = new Set()
       await sleep(900, signal)
 

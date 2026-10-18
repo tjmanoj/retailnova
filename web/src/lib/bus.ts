@@ -14,6 +14,8 @@ type BusEvents = {
   demoTab: 'shop' | 'manager'
   /** Guided demo stopped: cancel any typing in progress. */
   demoCancel: null
+  /** Start a fresh shopper conversation (memories are kept). */
+  newChat: null
   /** Radar should refresh (e.g. after an approval or a walk-in log). */
   radarRefresh: null
 }
